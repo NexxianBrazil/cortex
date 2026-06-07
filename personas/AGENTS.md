@@ -1,37 +1,32 @@
 # AGENTS — Operações da Persona
 
 <!--
-  TEMPLATE (Fase 0) — sem conteúdo real ainda.
-  Este arquivo define O QUE a persona FAZ: o catálogo de operações que ela
-  executa no dia a dia.
-
-  IMPORTANTE: este arquivo é apenas o ÍNDICE. Cada operação listada aqui
-  vira um arquivo próprio (um playbook) em `playbooks/`, com o manual
-  detalhado daquela operação: passos, sistemas envolvidos, critérios de
-  qualidade e condições de escalada.
-
-  Será preenchido na Fase 1.
+  EXEMPLO / SEED — índice fictício para desenvolvimento e testes.
+  NÃO é conteúdo curado de produção. Substitua antes de qualquer deploy.
 -->
 
-## Como este arquivo funciona
+Este arquivo é apenas o **índice** das operações da persona. Cada operação
+vira um arquivo próprio em [`playbooks/`](playbooks/) — um manual
+auto-contido, em formato híbrido (frontmatter estruturado + prosa), com os
+passos, as tools referenciadas e os pontos de escalonamento daquela operação.
 
-<!--
-  Convenção: cada operação recebe uma entrada na tabela abaixo e um arquivo
-  `playbooks/<nome-da-operacao>.md` com o manual completo.
--->
+As tools usadas pelos playbooks são declaradas **uma única vez** no catálogo
+[`tools.yaml`](tools.yaml) e referenciadas pelo nome — nunca redeclaradas
+dentro de um playbook.
 
 ## Catálogo de operações
 
-<!--
-  | Operação | Playbook | Descrição curta | Status |
-  |----------|----------|-----------------|--------|
-  | (ex.: conciliação fiscal) | playbooks/conciliacao-fiscal.md | ... | rascunho |
--->
+| Operação         | Playbook                                                 | Descrição curta                                  | Status   |
+|------------------|----------------------------------------------------------|--------------------------------------------------|----------|
+| `emitir_cotacao` | [playbooks/emitir_cotacao.md](playbooks/emitir_cotacao.md) | Emite cotação formal a partir de pedido de orçamento | exemplo |
 
 ## Regras gerais de execução
 
-<!--
-  Regras que valem para TODAS as operações (o que é específico de uma
-  operação fica no playbook dela). Ex.: sempre registrar justificativa,
-  sempre validar entrada antes de agir.
--->
+Regras que valem para **todas** as operações (o que é específico de uma
+operação fica no playbook dela):
+
+- Nenhum passo com tool fora do catálogo `tools.yaml`.
+- Situação sem playbook aplicável não se improvisa: escala-se
+  (comportamento `escalar_quando_incerto` do SOUL).
+- Todo escalonamento segue o mapa do `USER.md` — gestor aprova exceções;
+  colegas respondem pelos assuntos da sua especialidade.

@@ -18,7 +18,11 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "python-frontmatter>=1.1",
+]
 
 [project.optional-dependencies]
 dev = [

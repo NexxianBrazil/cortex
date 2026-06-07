@@ -1,0 +1,64 @@
+# =========================================================================
+# EXEMPLO / SEED — catálogo fictício para desenvolvimento e testes.
+# NÃO é conteúdo curado de produção. Substitua antes de qualquer deploy.
+# =========================================================================
+# Catálogo de TOOLS: cada ação atômica é declarada UMA única vez aqui e
+# referenciada pelos playbooks pelo nome. Nesta fase são só declarações
+# (contrato) — nada executa ainda. O risco_base (low/medium/high/critical)
+# será consumido pela Decision Engine na Fase 4.
+# =========================================================================
+tools:
+  - nome: consultar_preco
+    descricao: >-
+      Consulta o preço de tabela e a disponibilidade de um produto no
+      catálogo interno. Ação somente leitura, sem efeito externo.
+    risco_base: low
+    parametros:
+      - nome: codigo_produto
+        tipo: string
+        descricao: Código do produto no catálogo interno
+      - nome: quantidade
+        tipo: integer
+        descricao: Quantidade desejada, para cálculo de preço por faixa
+        obrigatorio: false
+
+  - nome: emitir_cotacao
+    descricao: >-
+      Gera o documento formal de cotação a partir dos itens, preços e
+      condições. Cria um registro oficial com número de cotação, mas ainda
+      não comunica nada ao cliente.
+    risco_base: medium
+    parametros:
+      - nome: cliente_id
+        tipo: string
+        descricao: Identificador do cliente no cadastro
+      - nome: itens
+        tipo: array
+        descricao: Lista de itens com código, quantidade e preço unitário
+      - nome: condicao_pagamento
+        tipo: string
+        descricao: Condição de pagamento (deve estar na tabela padrão)
+      - nome: validade_dias
+        tipo: integer
+        descricao: Validade da cotação em dias
+        obrigatorio: false
+
+  - nome: enviar_email
+    descricao: >-
+      Envia e-mail externo em nome da persona. Ação visível ao cliente e
+      irreversível — por isso o risco alto, mesmo sendo "só um e-mail".
+    risco_base: high
+    parametros:
+      - nome: destinatario
+        tipo: string
+        descricao: Endereço de e-mail do destinatário
+      - nome: assunto
+        tipo: string
+        descricao: Assunto da mensagem
+      - nome: corpo
+        tipo: string
+        descricao: Corpo da mensagem
+      - nome: anexos
+        tipo: array
+        descricao: Documentos anexados (ex. o PDF da cotação)
+        obrigatorio: false
