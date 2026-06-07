@@ -2,7 +2,7 @@
 
 **Cortex** é uma plataforma de "profissional digital" — ACP (*Artificial Cognitive Persona*) — que roda **on-premise** dentro de empresas.
 
-> **Status:** Fase 0 — fundação do repositório. Apenas estrutura, configuração e templates; nenhuma lógica de negócio implementada ainda.
+> **Status:** Fase 2 — identidade (Fase 1) + runtime com loop de agente, provedores de LLM configuráveis e tools mockadas. A sessão é **efêmera por design**: memória persistente é a Fase 3.
 
 ## Requisitos
 
@@ -23,7 +23,24 @@ ruff check .
 
 # testes
 pytest
+
+# conversar com a persona no terminal (StubProvider padrão — sem chave, sem rede)
+python -m cortex chat
 ```
+
+## Configuração
+
+A config é lida do `config.toml` (versionável) + variáveis de ambiente/`.env`
+(precedência maior). **Chaves de API vêm sempre de env/`.env`** — nunca de
+arquivo versionado. Copie `.env.example` para `.env` e preencha.
+
+Trocar de provedor de LLM é só configuração — o loop não muda:
+
+| `provider` | O que é | Requisito |
+|---|---|---|
+| `stub` (padrão) | LLM falso determinístico (CI/dev) | nenhum |
+| `claude` | API Anthropic (SDK oficial) | `ANTHROPIC_API_KEY` |
+| `openai` | Protocolo OpenAI: OpenAI, Ollama, vLLM, LLM interna | `OPENAI_API_KEY` e/ou `OPENAI_BASE_URL` |
 
 ## Estrutura do repositório
 

@@ -1,0 +1,17 @@
+# Configuração do Cortex (versionável — NUNCA coloque chaves de API aqui).
+# Chaves vêm SEMPRE de variáveis de ambiente ou do .env local (gitignorado).
+# Variáveis de ambiente têm precedência sobre este arquivo.
+
+# Provedor de LLM ativo: "stub" (determinístico, sem rede — padrão),
+# "claude" (API Anthropic) ou "openai" (protocolo OpenAI: OpenAI/Ollama/vLLM).
+provider = "stub"
+
+# Modelo do provedor ativo. Comentado = usa o padrão do provedor
+# (claude: claude-opus-4-8 | openai: gpt-4o-mini).
+# modelo = "claude-opus-4-8"
+
+# Teto de iterações do loop por turno (guardrail de custo/segurança).
+max_iteracoes = 10
+
+# Pasta com a formação da persona (SOUL.md, USER.md, tools.yaml, playbooks/).
+personas_dir = "personas"
