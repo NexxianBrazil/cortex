@@ -47,6 +47,12 @@ class CortexConfig(BaseSettings):
         description="Modelo do provedor ativo; None usa o padrão do provedor",
     )
 
+    # --- escolha do classificador de memória (mesma ideia do provider) ---
+    classifier: Literal["heuristic", "llm"] = Field(
+        default="heuristic",
+        description="Classificador de relação da memória; 'llm' é SEAM (Fase 3c)",
+    )
+
     # --- guardrails do loop ---
     max_iteracoes: int = Field(
         default=10, ge=1, description="Teto de voltas do loop por turno (guardrail de custo)"

@@ -46,6 +46,9 @@ packages = ["src/cortex"]
 target-version = "py311"
 line-length = 100
 src = ["src", "tests"]
+# reference/ guarda o protótipo original (ponto de partida da Fase 3), mantido
+# verbatim como artefato histórico — não é código do projeto e não é lintado.
+extend-exclude = ["reference"]
 
 [tool.ruff.lint]
 select = [
