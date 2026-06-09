@@ -53,6 +53,16 @@ class CortexConfig(BaseSettings):
         description="Classificador de relação da memória; 'llm' é SEAM (Fase 3c)",
     )
 
+    # --- escolha da persistência da memória (Fase 3b) ---
+    store: Literal["memory", "graphiti"] = Field(
+        default="memory",
+        description="Persistência da memória; 'memory' (default dev/CI) ou 'graphiti' (Kuzu)",
+    )
+    kuzu_db_path: Path = Field(
+        default=Path("cortex_memory.kuzu"),
+        description="Arquivo do banco Kuzu embarcado (usado quando store='graphiti')",
+    )
+
     # --- guardrails do loop ---
     max_iteracoes: int = Field(
         default=10, ge=1, description="Teto de voltas do loop por turno (guardrail de custo)"

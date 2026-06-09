@@ -26,6 +26,11 @@ dist/
 .coverage
 htmlcov/
 
+# Banco Kuzu embarcado (memória persistente — Fase 3b)
+*.kuzu
+*.kuzu.wal
+*.kuzu.tmp/
+
 # IDEs / editores
 .idea/
 .vscode/

@@ -7,10 +7,15 @@ e nunca pergunta qual é.
 
 from cortex.config import CortexConfig
 from cortex.memory.classifier import Classifier, HeuristicClassifier
+from cortex.memory.store import InMemoryStore, MemoryStore
 
 
 class ConfiguracaoClassifierError(Exception):
     """Config de classificador inválida ou ainda não suportada nesta fase."""
+
+
+class ConfiguracaoStoreError(Exception):
+    """Config de persistência inválida ou dependência ausente."""
 
 
 def criar_classifier(config: CortexConfig) -> Classifier:
@@ -28,3 +33,28 @@ def criar_classifier(config: CortexConfig) -> Classifier:
         )
 
     raise ConfiguracaoClassifierError(f"classifier desconhecido: {config.classifier!r}")
+
+
+def criar_store(config: CortexConfig) -> MemoryStore:
+    """Instancia a persistência ativa segundo a config — store é trocável.
+
+    Default em dev/CI é o InMemoryStore (rápido, sem dependências). 'graphiti'
+    pluga o Kuzu embarcado; se o pacote opcional não estiver instalado, falha
+    alto e claro (como o provider factory faz quando falta chave).
+    """
+    if config.store == "memory":
+        return InMemoryStore()
+
+    if config.store == "graphiti":
+        try:
+            # Import preguiçoso: a stack do Graphiti/Kuzu é opcional (extra
+            # 'graphiti'); só é exigida quando o store é realmente o graphiti.
+            from cortex.memory.graphiti_store import GraphitiStore
+        except ImportError as exc:
+            raise ConfiguracaoStoreError(
+                "store=graphiti exige o extra opcional: instale com "
+                "`uv pip install -e \".[graphiti]\"` (graphiti-core[kuzu])."
+            ) from exc
+        return GraphitiStore(config.kuzu_db_path)
+
+    raise ConfiguracaoStoreError(f"store desconhecido: {config.store!r}")

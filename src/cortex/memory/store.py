@@ -86,3 +86,20 @@ class InMemoryStore(MemoryStore):
 
     def entities(self) -> list[Entity]:
         return list(self._entidades.values())
+
+    # --- helpers de iteração (leitura) ---
+    # Não fazem parte do contrato MemoryStore; existem para um backend de
+    # persistência (GraphitiStore) usar este store como working set e
+    # re-serializar o conjunto completo. São leituras puras, seguras.
+
+    def all_beliefs(self) -> list[Belief]:
+        """Todas as crenças de todas as chaves (ativas e superadas)."""
+        return [b for crencas in self._crencas.values() for b in crencas]
+
+    def all_episodes(self) -> list[Episode]:
+        """Todos os episódios registrados."""
+        return list(self._episodios)
+
+    def all_entities(self) -> list[Entity]:
+        """Todas as entidades conhecidas."""
+        return list(self._entidades.values())

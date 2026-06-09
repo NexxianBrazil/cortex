@@ -32,6 +32,15 @@ dev = [
     "ruff>=0.4",
     "pytest>=8.0",
 ]
+# Persistência da memória (Fase 3b). Extra SEPARADO de propósito: a stack do
+# Graphiti/Kuzu é pesada e o CI não precisa dela — os testes de persistência
+# se pulam quando o pacote não está instalado. Instale com:
+#   uv pip install -e ".[graphiti]"
+# Nota: o backend Kuzu está deprecado no graphiti-core upstream; segue sendo a
+# única opção embarcada/sem servidor e fica isolada atrás do MemoryStore ABC.
+graphiti = [
+    "graphiti-core[kuzu]>=0.29",
+]
 
 [project.scripts]
 cortex = "cortex.__main__:main"

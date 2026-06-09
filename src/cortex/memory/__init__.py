@@ -28,7 +28,9 @@ from cortex.memory.entity import (
 from cortex.memory.episodic import Episode
 from cortex.memory.factory import (
     ConfiguracaoClassifierError,
+    ConfiguracaoStoreError,
     criar_classifier,
+    criar_store,
 )
 from cortex.memory.models import (
     Justification,
@@ -54,6 +56,7 @@ __all__ = [
     "Belief",
     "Classifier",
     "ConfiguracaoClassifierError",
+    "ConfiguracaoStoreError",
     "DictAuthorityMap",
     "DictSourceOfTruth",
     "Entity",
@@ -75,4 +78,5 @@ __all__ = [
     "TruthLookup",
     "agora",
     "criar_classifier",
+    "criar_store",
 ]
