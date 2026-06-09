@@ -64,7 +64,9 @@ def test_carregar_tools_exemplo():
     assert set(tools) >= {"consultar_preco", "emitir_cotacao", "enviar_email"}
     # O risco base é o enum compartilhado, não uma string solta.
     assert tools["consultar_preco"].risco_base is RiskLevel.LOW
-    assert tools["enviar_email"].risco_base is RiskLevel.HIGH
+    # enviar_email tem base LOW: o risco é POR ESCOPO (Fase 4) — a política
+    # eleva para HIGH/CRITICAL conforme destinatário externo / anexo.
+    assert tools["enviar_email"].risco_base is RiskLevel.LOW
     assert tools["emitir_cotacao"].parametros  # parâmetros declarados
 
 

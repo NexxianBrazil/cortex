@@ -14,6 +14,7 @@ import json
 import logging
 from collections.abc import Sequence
 
+from cortex.governance.engine import DecisionEngine
 from cortex.identity.models import Persona
 from cortex.memory.engine import MemoryEngine
 from cortex.memory.semantic import Belief
@@ -96,6 +97,7 @@ class AgentLoop:
         max_iteracoes: int = 10,
         memory: MemoryEngine | None = None,
         recall_limite: int = 5,
+        decision: DecisionEngine | None = None,
     ) -> None:
         if max_iteracoes < 1:
             raise ValueError("max_iteracoes deve ser >= 1")
@@ -106,6 +108,10 @@ class AgentLoop:
         # promoção). Com memória, o turno passa a ler e a escrever na 3a/3b.
         self._memory = memory
         self._recall_limite = recall_limite
+        # decision=None mantém o loop sem governança. Com o DecisionEngine,
+        # cada chamada de tool passa pelo crivo de risco antes de executar
+        # (observe: só loga; enforce: barra MEDIUM+). Ver Fase 4a.
+        self._decision = decision
 
     def executar_turno(self, session: Session, entrada_usuario: str) -> str:
         """Roda um turno completo e devolve a resposta final em texto.
@@ -152,6 +158,36 @@ class AgentLoop:
                 logger.info(
                     "iteração %d: tool=%s args=%s", iteracao, pedido.nome, pedido.argumentos
                 )
+
+                # Crivo de risco (Fase 4a): avalia ANTES de executar. Em
+                # observe, decisao.executou é sempre True (só loga). Em
+                # enforce, MEDIUM+ não executa e vira resultado tratável de
+                # "precisa aprovação" — o loop não cai, o LLM se adapta.
+                if self._decision is not None:
+                    decisao = self._decision.avaliar(pedido.nome, pedido.argumentos)
+                    if not decisao.executou:
+                        conteudo = (
+                            f"AÇÃO BLOQUEADA pela governança — precisa de aprovação "
+                            f"(risco {decisao.risco.value}): {'; '.join(decisao.motivos)}. "
+                            "A fila de aprovação será tratada na Fase 4c."
+                        )
+                        logger.warning(
+                            "iteração %d: tool=%s BLOQUEADA (enforce, risco=%s)",
+                            iteracao,
+                            pedido.nome,
+                            decisao.risco.value,
+                        )
+                        session.historico.append(
+                            Message(
+                                role=Role.TOOL,
+                                content=conteudo,
+                                tool_call_id=pedido.id,
+                                nome_tool=pedido.nome,
+                                erro=True,
+                            )
+                        )
+                        continue
+
                 try:
                     resultado = self._registry.executar(pedido.nome, pedido.argumentos)
                     conteudo = json.dumps(resultado, ensure_ascii=False)

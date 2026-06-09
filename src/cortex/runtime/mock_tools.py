@@ -36,6 +36,7 @@ def _emitir_cotacao(
     cliente_id: str,
     itens: list,
     condicao_pagamento: str,
+    valor_total: float | None = None,
     validade_dias: int = 15,
 ) -> dict:
     """Gera um número de cotação fake e determinístico (sem estado, sem banco)."""
@@ -44,6 +45,7 @@ def _emitir_cotacao(
         "cliente_id": cliente_id,
         "total_itens": len(itens),
         "condicao_pagamento": condicao_pagamento,
+        "valor_total": valor_total,
         "validade_dias": validade_dias,
         "status": "emitida",
     }

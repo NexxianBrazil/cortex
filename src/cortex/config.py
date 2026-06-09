@@ -68,6 +68,12 @@ class CortexConfig(BaseSettings):
         description="Máximo de beliefs injetados no contexto por turno (recuperação enxuta)",
     )
 
+    # --- governança (Fase 4) ---
+    decision_mode: Literal["observe", "enforce"] = Field(
+        default="observe",
+        description="Decision Engine: 'observe' (dry-run, default) ou 'enforce' (barra MEDIUM+)",
+    )
+
     # --- guardrails do loop ---
     max_iteracoes: int = Field(
         default=10, ge=1, description="Teto de voltas do loop por turno (guardrail de custo)"

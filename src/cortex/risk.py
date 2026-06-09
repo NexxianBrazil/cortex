@@ -22,3 +22,26 @@ class RiskLevel(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+    @property
+    def ordem(self) -> int:
+        """Posição na escala (0=LOW … 3=CRITICAL).
+
+        Necessária porque StrEnum compara pelos VALORES (alfabético:
+        critical<high<low<medium — sem sentido). A Decision Engine (Fase 4)
+        precisa ordenar e tomar o máximo de riscos, então a ordem é explícita.
+        """
+        return _ORDEM[self]
+
+
+_ORDEM = {
+    RiskLevel.LOW: 0,
+    RiskLevel.MEDIUM: 1,
+    RiskLevel.HIGH: 2,
+    RiskLevel.CRITICAL: 3,
+}
+
+
+def risco_maximo(a: RiskLevel, b: RiskLevel) -> RiskLevel:
+    """O mais alto entre dois riscos — base do empilhamento de escaladores."""
+    return a if a.ordem >= b.ordem else b

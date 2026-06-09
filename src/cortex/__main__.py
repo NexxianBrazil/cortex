@@ -27,7 +27,8 @@ def _chat(config: CortexConfig) -> int:
 
     print(
         f"Cortex — conversando com {persona.soul.nome} ({persona.soul.papel}) "
-        f"[provider={config.provider} | classifier={config.classifier} | store={config.store}]"
+        f"[provider={config.provider} | classifier={config.classifier} | "
+        f"store={config.store} | decisão={config.decision_mode}]"
     )
     print(
         "Digite 'sair' (ou Ctrl-D) para encerrar. A conversa é efêmera; o que a "

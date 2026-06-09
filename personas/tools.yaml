@@ -38,6 +38,10 @@ tools:
       - nome: condicao_pagamento
         tipo: string
         descricao: Condição de pagamento (deve estar na tabela padrão)
+      - nome: valor_total
+        tipo: number
+        descricao: Valor total da cotação (usado pela política de risco; teto de alçada)
+        obrigatorio: false
       - nome: validade_dias
         tipo: integer
         descricao: Validade da cotação em dias
@@ -45,9 +49,11 @@ tools:
 
   - nome: enviar_email
     descricao: >-
-      Envia e-mail externo em nome da persona. Ação visível ao cliente e
-      irreversível — por isso o risco alto, mesmo sendo "só um e-mail".
-    risco_base: high
+      Envia e-mail em nome da persona. O risco é POR ESCOPO (Fase 4): base
+      baixo para e-mail interno; a política eleva para alto quando o
+      destinatário é externo, e crítico se houver anexo (dado de cliente
+      saindo). O risco mora na chamada concreta, não no tipo da tool.
+    risco_base: low
     parametros:
       - nome: destinatario
         tipo: string

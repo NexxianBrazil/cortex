@@ -13,6 +13,8 @@ não conhece o runtime (o LLMProvider para o LLMClassifier é injetado aqui).
 import logging
 
 from cortex.config import CortexConfig
+from cortex.governance.engine import DecisionEngine, DecisionMode
+from cortex.governance.example_policy import construir_policy_exemplo
 from cortex.identity.models import Persona
 from cortex.memory.engine import MemoryEngine
 from cortex.memory.factory import criar_classifier, criar_store
@@ -43,10 +45,21 @@ def montar_engine(config: CortexConfig, provider=None) -> MemoryEngine:
     )
 
 
+def montar_decision_engine(config: CortexConfig, persona: Persona) -> DecisionEngine:
+    """Constrói o Decision Engine com a policy de exemplo e o modo da config.
+
+    A policy de exemplo deriva o risco base de cada ToolDeclaration da persona
+    e anexa os escaladores seed (ver governance/example_policy.py). O modo
+    (observe/enforce) vem da config — default observe.
+    """
+    policy = construir_policy_exemplo(persona.tools)
+    return DecisionEngine(policy, mode=DecisionMode(config.decision_mode))
+
+
 def montar_runtime(
     config: CortexConfig, persona: Persona
 ) -> tuple[AgentLoop, MemoryEngine]:
-    """Monta o loop JÁ conectado à memória e devolve (loop, engine).
+    """Monta o loop JÁ conectado à memória e à governança; devolve (loop, engine).
 
     O mesmo engine serve várias Sessions no processo — é o que faz a persona
     lembrar de uma conversa para outra (e, com store=graphiti, entre
@@ -54,6 +67,7 @@ def montar_runtime(
     """
     provider = criar_provider(config)
     engine = montar_engine(config, provider)
+    decision = montar_decision_engine(config, persona)
     registry = criar_registry_mock(persona.tools)
     loop = AgentLoop(
         provider,
@@ -61,5 +75,6 @@ def montar_runtime(
         max_iteracoes=config.max_iteracoes,
         memory=engine,
         recall_limite=config.memoria_recall_max,
+        decision=decision,
     )
     return loop, engine
