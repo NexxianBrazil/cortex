@@ -22,12 +22,10 @@ class Session:
         self.historico: list[Message] = []
 
     # ------------------------------------------------------------------
-    # SEAM — Fase 3 (memória persistente) conecta AQUI.
-    #
-    # Quando a camada de memória existir (episódica/entidade/semântica via
-    # Graphiti), a "promoção para memória" será um método desta classe — algo
-    # como `promover_para_memoria()` — chamado ao fim do turno/sessão para
-    # destilar o histórico efêmero em registros persistentes. O loop não
-    # muda: ele continua só anexando ao `historico`; quem decide o que vira
-    # memória é a camada da Fase 3. NÃO implementado de propósito.
+    # Memória (Fase 3c): a Session SEGUE efêmera — este `historico` morre com
+    # a sessão. O que sobrevive é o que o loop PROMOVE ao MemoryEngine no fim
+    # de cada turno (ver AgentLoop.executar_turno + runtime/promotion.py).
+    # A promoção mora no loop (não aqui) de propósito: a Session é só o estado
+    # da conversa; quem orquestra leitura/escrita da memória é o loop. Assim a
+    # Session não precisa conhecer o motor de memória.
     # ------------------------------------------------------------------

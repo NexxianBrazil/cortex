@@ -78,6 +78,15 @@ class MemoryEngine:
         """Toda a linha do tempo da chave, do mais antigo ao mais novo."""
         return sorted(self.store.beliefs_for(key), key=lambda b: b.valid_at)
 
+    def beliefs_ativos(self) -> list[Belief]:
+        """A crença vigente de CADA chave conhecida — base da recuperação (3c).
+
+        Usa active() por chave (resolve o vencedor por confiança/saliência),
+        então o que volta é exatamente o que o Cortex 'sabe' agora.
+        """
+        chaves = {b.key for b in self.store.all_beliefs()}
+        return [a for k in chaves if (a := self.active(k)) is not None]
+
     # ---- autoridade e magnitude ------------------------------------------ #
 
     def _authority(self, source: Source, domain: str) -> float:

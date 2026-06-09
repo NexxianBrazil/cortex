@@ -49,20 +49,55 @@ class HeuristicClassifier(Classifier):
 
 
 class LLMClassifier(Classifier):
-    """SEAM — classificação por LLM (NÃO implementada nesta fase).
+    """Classificação por LLM (Fase 3c) — usa a camada de LLMProvider da Fase 2.
 
-    Quando ligada, recebe um LLMProvider da Fase 2 e pede ao modelo a leitura
-    semântica da relação (inspiração HiMem: independente/estende/contradiz),
-    em vez da igualdade literal da heurística. Deixada aqui, nomeada e
-    documentada, para a fase futura plugar sem redesenhar nada: o motor já
-    fala só com a interface `Classifier`.
+    Pede ao modelo a leitura semântica da relação (independente/reforça/
+    contradiz) entre a crença vigente e a afirmação nova — algo que a
+    igualdade literal da heurística não capta (ex.: '30 dias' vs 'um mês'
+    REFORÇA; '30 dias' vs 'trimestral' CONTRADIZ). Continua sendo opção de
+    config: o default e o CI usam a heurística determinística.
+
+    Curto-circuito: sem crença vigente é sempre INDEPENDENTE — não gasta uma
+    chamada de LLM para o óbvio.
     """
+
+    _SYSTEM = (
+        "Você classifica a relação entre uma crença existente e uma afirmação "
+        "nova sobre o MESMO assunto. Responda com UMA palavra, sem pontuação: "
+        "'independente' (assuntos distintos), 'reforça' (mesmo sentido) ou "
+        "'contradiz' (sentido conflitante)."
+    )
 
     def __init__(self, provider: "LLMProvider") -> None:
         self._provider = provider
 
     def classify(self, existing: Belief | None, value: str) -> Relationship:
-        raise NotImplementedError(
-            "LLMClassifier é um SEAM da Fase 3a — a classificação por LLM será "
-            "implementada quando a memória for conectada ao runtime (Fase 3c)."
+        if existing is None:
+            return Relationship.INDEPENDENT
+        # Import local: evita acoplar o módulo de memória ao runtime no import.
+        from cortex.runtime.messages import Message, Role
+
+        pergunta = Message(
+            role=Role.USER,
+            content=(
+                f"Crença existente: '{existing.value}'.\n"
+                f"Afirmação nova: '{value}'.\n"
+                "A afirmação nova reforça, contradiz ou é independente?"
+            ),
         )
+        resposta = self._provider.gerar(self._SYSTEM, [pergunta], [])
+        return self._interpretar(resposta.texto)
+
+    @staticmethod
+    def _interpretar(texto: str | None) -> Relationship:
+        """Mapeia a resposta livre do LLM para o enum, tolerante a variações.
+
+        Conservador no incerto: o que não casar com reforço/contradição cai em
+        INDEPENDENTE — não inventa um conflito que o modelo não afirmou.
+        """
+        t = normalizar(texto or "")
+        if "contrad" in t:
+            return Relationship.CONTRADICTS
+        if "refor" in t:
+            return Relationship.REINFORCES
+        return Relationship.INDEPENDENT

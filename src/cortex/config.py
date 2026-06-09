@@ -62,6 +62,11 @@ class CortexConfig(BaseSettings):
         default=Path("cortex_memory.kuzu"),
         description="Arquivo do banco Kuzu embarcado (usado quando store='graphiti')",
     )
+    memoria_recall_max: int = Field(
+        default=5,
+        ge=0,
+        description="Máximo de beliefs injetados no contexto por turno (recuperação enxuta)",
+    )
 
     # --- guardrails do loop ---
     max_iteracoes: int = Field(

@@ -5,9 +5,15 @@ configurável, executa tools mockadas e mantém estado EFÊMERO por sessão.
 Memória persistente (Fase 3) e governança (Fase 4) plugam por cima disto.
 """
 
+from cortex.runtime.app import montar_engine, montar_runtime
 from cortex.runtime.loop import AgentLoop, LoopLimiteExcedidoError, montar_system_prompt
 from cortex.runtime.messages import LLMResponse, Message, Role, ToolCall
 from cortex.runtime.mock_tools import criar_registry_mock
+from cortex.runtime.promotion import (
+    PromotionCandidate,
+    extrair_candidatos,
+    promover,
+)
 from cortex.runtime.providers import (
     ClaudeProvider,
     ConfiguracaoProviderError,
@@ -16,6 +22,7 @@ from cortex.runtime.providers import (
     StubProvider,
     criar_provider,
 )
+from cortex.runtime.recall import recuperar_beliefs
 from cortex.runtime.session import Session
 from cortex.runtime.tools import (
     ArgumentosInvalidosError,
@@ -34,6 +41,7 @@ __all__ = [
     "LoopLimiteExcedidoError",
     "Message",
     "OpenAICompatProvider",
+    "PromotionCandidate",
     "Role",
     "Session",
     "StubProvider",
@@ -43,5 +51,10 @@ __all__ = [
     "ToolRegistry",
     "criar_provider",
     "criar_registry_mock",
+    "extrair_candidatos",
+    "montar_engine",
+    "montar_runtime",
     "montar_system_prompt",
+    "promover",
+    "recuperar_beliefs",
 ]

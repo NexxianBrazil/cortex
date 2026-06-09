@@ -12,10 +12,15 @@ governança da Fase 4 vai formalizar.
 
 import json
 import logging
+from collections.abc import Sequence
 
 from cortex.identity.models import Persona
+from cortex.memory.engine import MemoryEngine
+from cortex.memory.semantic import Belief
 from cortex.runtime.messages import Message, Role
+from cortex.runtime.promotion import promover
 from cortex.runtime.providers.base import LLMProvider
+from cortex.runtime.recall import formatar_beliefs, recuperar_beliefs
 from cortex.runtime.session import Session
 from cortex.runtime.tools import ToolError, ToolRegistry
 
@@ -26,13 +31,19 @@ class LoopLimiteExcedidoError(RuntimeError):
     """O turno estourou o teto de iterações sem o LLM concluir em texto."""
 
 
-def montar_system_prompt(persona: Persona) -> str:
+def montar_system_prompt(
+    persona: Persona, beliefs_relevantes: Sequence[Belief] | None = None
+) -> str:
     """Monta o contexto da persona: SOUL + autoridade/relacionamento + playbooks.
 
     A prosa entra como persona para o LLM absorver; os comportamentos e
     escalonamentos entram explicitados porque são as regras que o modelo
     precisa seguir À RISCA (na Fase 4 eles também serão verificados por
     engine, não só por prompt).
+
+    `beliefs_relevantes` (Fase 3c) injeta, de forma enxuta, o que a memória já
+    sabe sobre o que se conversa — para o Cortex "saber o que já sabe" antes de
+    responder. Vazio/None mantém o comportamento da Fase 2.
     """
     soul = persona.soul
     user = persona.user
@@ -69,6 +80,9 @@ def montar_system_prompt(persona: Persona) -> str:
             f"{playbook.prosa}\n\n### Pontos de escalonamento\n{escalonamento}"
         )
 
+    if beliefs_relevantes:
+        partes.append(formatar_beliefs(beliefs_relevantes))
+
     return "\n\n".join(partes)
 
 
@@ -80,21 +94,37 @@ class AgentLoop:
         provider: LLMProvider,
         registry: ToolRegistry,
         max_iteracoes: int = 10,
+        memory: MemoryEngine | None = None,
+        recall_limite: int = 5,
     ) -> None:
         if max_iteracoes < 1:
             raise ValueError("max_iteracoes deve ser >= 1")
         self._provider = provider
         self._registry = registry
         self._max_iteracoes = max_iteracoes
+        # memory=None reproduz EXATAMENTE o loop da Fase 2 (sem recall nem
+        # promoção). Com memória, o turno passa a ler e a escrever na 3a/3b.
+        self._memory = memory
+        self._recall_limite = recall_limite
 
     def executar_turno(self, session: Session, entrada_usuario: str) -> str:
         """Roda um turno completo e devolve a resposta final em texto.
 
-        Levanta LoopLimiteExcedidoError se o LLM não concluir dentro do teto
-        — preferimos falhar alto a queimar tokens em um loop sem fim.
+        Com memória conectada: recupera beliefs relevantes ao montar o contexto
+        (leitura) e, ao concluir o turno, promove os candidatos claros à
+        memória persistente (escrita). Levanta LoopLimiteExcedidoError se o LLM
+        não concluir dentro do teto — preferimos falhar alto a queimar tokens.
         """
+        # Marca o início do turno para a promoção olhar só o que aconteceu agora.
+        inicio_turno = len(session.historico)
         session.historico.append(Message(role=Role.USER, content=entrada_usuario))
-        system = montar_system_prompt(session.persona)
+
+        beliefs = (
+            recuperar_beliefs(self._memory, entrada_usuario, self._recall_limite)
+            if self._memory is not None
+            else []
+        )
+        system = montar_system_prompt(session.persona, beliefs)
         tools = list(session.persona.tools.values())
 
         for iteracao in range(1, self._max_iteracoes + 1):
@@ -104,6 +134,10 @@ class AgentLoop:
                 texto = resposta.texto or ""
                 session.historico.append(Message(role=Role.ASSISTANT, content=texto))
                 logger.info("turno concluído na iteração %d", iteracao)
+                if self._memory is not None:
+                    # Promoção no FIM do turno (decisão 1): só candidatos claros,
+                    # pelo crivo do observe(). Ver runtime/promotion.py.
+                    promover(self._memory, session.historico[inicio_turno:])
                 return texto
 
             # O LLM pediu tools: registra o pedido e executa cada uma.

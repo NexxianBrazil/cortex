@@ -278,9 +278,9 @@ def test_classificador_default_vem_da_config():
     assert isinstance(cls, HeuristicClassifier)
 
 
-def test_classificador_llm_e_seam_documentado():
-    """classifier=llm é SEAM da 3c: falha alto e claro, não silenciosamente."""
-    with pytest.raises(ConfiguracaoClassifierError, match="Fase 3c"):
+def test_classificador_llm_exige_provider():
+    """classifier=llm (implementado na 3c) exige um provider; falha claro sem ele."""
+    with pytest.raises(ConfiguracaoClassifierError, match="LLMProvider"):
         criar_classifier(CortexConfig(classifier="llm"))
 
 

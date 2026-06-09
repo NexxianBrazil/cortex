@@ -186,3 +186,73 @@ def test_reabrir_arquivo_vazio_nao_quebra(tmp_path):
         assert store.entities() == []
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# Fase 3c × persistência real: a Mariana lembra ENTRE EXECUÇÕES (em disco)
+# ---------------------------------------------------------------------------
+
+
+def test_mariana_lembra_com_persistencia_real_em_disco(tmp_path):
+    """Aprende numa sessão+store, reabre o store noutra sessão, e lembra.
+
+    Une a ponte da 3c (promoção+recuperação) à persistência da 3b (Kuzu):
+    o fato promovido sobrevive ao fechar e reabrir o arquivo.
+    """
+    from cortex.identity import carregar_persona
+    from cortex.memory import HeuristicClassifier, MemoryEngine
+    from cortex.runtime import (
+        AgentLoop,
+        LLMResponse,
+        Session,
+        StubProvider,
+        ToolCall,
+        criar_registry_mock,
+    )
+
+    personas_dir = __import__("pathlib").Path(__file__).resolve().parent.parent / "personas"
+    persona = carregar_persona(personas_dir)
+    registry = criar_registry_mock(persona.tools)
+    db = tmp_path / "lembranca.kuzu"
+
+    def _engine(store):
+        return MemoryEngine(
+            store=store,
+            classifier=HeuristicClassifier(),
+            authority_map=DictAuthorityMap({}),
+            source_of_truth=DictSourceOfTruth({}),
+        )
+
+    # --- Execução 1: aprende via tool e promove; fecha o store (em disco). ---
+    store1 = GraphitiStore(db)
+    eng1 = _engine(store1)
+    stub1 = StubProvider(
+        roteiro=[
+            LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="t1",
+                        nome="consultar_preco",
+                        argumentos={"codigo_produto": "PRD-001"},
+                    )
+                ]
+            ),
+            LLMResponse(texto="É R$ 1250,00."),
+        ]
+    )
+    AgentLoop(stub1, registry, memory=eng1).executar_turno(Session(persona), "preço do PRD-001?")
+    assert eng1.active("produto:PRD-001:preco") is not None
+    store1.close()
+
+    # --- Execução 2: reabre o MESMO arquivo; a Mariana recupera o fato. ---
+    store2 = GraphitiStore(db)
+    try:
+        eng2 = _engine(store2)
+        stub2 = StubProvider(roteiro=[LLMResponse(texto="Tenho R$ 1250,00 registrado.")])
+        loop2 = AgentLoop(stub2, registry, memory=eng2)
+        loop2.executar_turno(Session(persona), "você lembra o preço do PRD-001?")
+        system_usado = stub2.chamadas[0][0]
+        assert "produto:PRD-001:preco" in system_usado
+        assert "1250" in system_usado
+    finally:
+        store2.close()

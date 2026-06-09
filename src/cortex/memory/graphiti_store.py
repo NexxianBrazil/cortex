@@ -142,6 +142,9 @@ class GraphitiStore(MemoryStore):
     def beliefs_for(self, key: str) -> list[Belief]:
         return self._working.beliefs_for(key)
 
+    def all_beliefs(self) -> list[Belief]:
+        return self._working.all_beliefs()
+
     def episodes(self) -> list[Episode]:
         return self._working.episodes()
 

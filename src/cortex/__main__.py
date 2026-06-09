@@ -12,11 +12,9 @@ import sys
 from cortex.config import CortexConfig
 from cortex.identity import carregar_persona
 from cortex.runtime import (
-    AgentLoop,
     LoopLimiteExcedidoError,
     Session,
-    criar_provider,
-    criar_registry_mock,
+    montar_runtime,
 )
 
 COMANDOS_SAIDA = {"sair", "exit", "quit"}
@@ -24,16 +22,17 @@ COMANDOS_SAIDA = {"sair", "exit", "quit"}
 
 def _chat(config: CortexConfig) -> int:
     persona = carregar_persona(config.personas_dir)
-    provider = criar_provider(config)
-    registry = criar_registry_mock(persona.tools)
-    loop = AgentLoop(provider, registry, max_iteracoes=config.max_iteracoes)
+    loop, _engine = montar_runtime(config, persona)
     session = Session(persona)
 
     print(
         f"Cortex — conversando com {persona.soul.nome} ({persona.soul.papel}) "
-        f"[provider={config.provider}]"
+        f"[provider={config.provider} | classifier={config.classifier} | store={config.store}]"
     )
-    print("Digite 'sair' (ou Ctrl-D) para encerrar. A sessão é efêmera: nada persiste.\n")
+    print(
+        "Digite 'sair' (ou Ctrl-D) para encerrar. A conversa é efêmera; o que a "
+        "Mariana aprende é promovido à memória.\n"
+    )
 
     while True:
         try:

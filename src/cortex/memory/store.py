@@ -30,6 +30,10 @@ class MemoryStore(ABC):
     def beliefs_for(self, key: str) -> list[Belief]:
         """Todas as crenças daquela chave — ativas, superadas e rejeitadas."""
 
+    @abstractmethod
+    def all_beliefs(self) -> list[Belief]:
+        """Todas as crenças de todas as chaves — base da recuperação (Fase 3c)."""
+
     # --- episódica (eventos crus) ---
     @abstractmethod
     def add_episode(self, episode: Episode) -> None:
