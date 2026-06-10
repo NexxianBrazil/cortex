@@ -28,6 +28,16 @@ MAPEAMENTO supersessão → bi-temporal nativo: cada Belief vira um nó com
 valid_at/invalid_at e status; o nó antigo NUNCA é apagado (status SUPERSEDED,
 invalid_at setado) e ganha uma aresta SUPERSEDES (nova)→(antiga) com a razão.
 active() = nós ACTIVE; history() = todos os nós da chave por valid_at.
+
+DÍVIDA TÉCNICA CONSCIENTE (não otimizar agora; resolver junto, na escrita
+incremental futura):
+  - re-serialização O(n) a cada checkpoint (DETACH DELETE + regravar tudo);
+  - backend Kuzu DEPRECADO no graphiti-core upstream (sem manutenção; ele
+    recomenda Neo4j/FalkorDB). A migração é localizada porque tudo fala com a
+    interface MemoryStore — trocar de backend é uma nova implementação dela;
+  - o checkpoint NÃO é atômico: o DETACH DELETE e a regravação são statements
+    separados, então uma falha no meio perde dados já persistidos. A escrita
+    incremental futura (upsert por nó, sem apagar tudo) resolve isto e o O(n).
 """
 
 import asyncio
@@ -44,8 +54,9 @@ from cortex.memory.entity import (
     Entity,
     EntityAttribute,
     EntityKind,
+    ids_entidade,
 )
-from cortex.memory.episodic import Episode
+from cortex.memory.episodic import Episode, ids_episodio
 from cortex.memory.models import (
     Justification,
     Relationship,
@@ -53,7 +64,7 @@ from cortex.memory.models import (
     SourceKind,
     Status,
 )
-from cortex.memory.semantic import Belief
+from cortex.memory.semantic import Belief, ids_crenca
 from cortex.memory.store import InMemoryStore, MemoryStore
 from cortex.risk import RiskLevel
 
@@ -268,6 +279,18 @@ class GraphitiStore(MemoryStore):
                 )
         for ent in entidades.values():
             self._working.upsert_entity(ent)
+
+        # CRÍTICO: avança os contadores de id para além do que foi hidratado.
+        # Sem isto, num processo novo os contadores recomeçam do 1 e colidem
+        # com a PRIMARY KEY dos nós já no Kuzu — a 1ª escrita quebraria o
+        # checkpoint (e, como ele faz DETACH DELETE antes de regravar,
+        # corromperia o banco). Ver Contador.garantir_minimo em models.py.
+        beliefs = self._working.all_beliefs()
+        episodes = self._working.episodes()
+        entidades_lst = self._working.entities()
+        ids_crenca.garantir_minimo(max((b.id for b in beliefs), default=0) + 1)
+        ids_episodio.garantir_minimo(max((e.id for e in episodes), default=0) + 1)
+        ids_entidade.garantir_minimo(max((x.id for x in entidades_lst), default=0) + 1)
 
 
 # --------------------------------------------------------------------------- #

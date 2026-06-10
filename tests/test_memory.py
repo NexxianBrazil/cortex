@@ -135,6 +135,40 @@ def test_C_magnitude_absurda_autoridade_menor_escala_sem_mudar(engine):
     assert "magnitude suspeita" in pendente.reason
 
 
+def test_correcao_gestor_sobre_documento_nao_escala(engine):
+    """Correção 3: gestor autoritativo corrige um DOCUMENTO bem justificado.
+
+    Antes da correção, a confiança da vigente (documento: 0.9 + why + evidence
+    = 1.1) batia a autoridade CRUA do gestor (1.0) e a correção escalava à toa.
+    Comparando confiança×confiança, o gestor (1.0 + why = 1.1) >= vigente →
+    delibera e supera (não escala), preservando a linhagem.
+    """
+    engine.observe(
+        "cliente:ABC:condicao",
+        "à vista",
+        Source(name="manual_comercial.pdf", kind=SourceKind.DOCUMENT),
+        Justification(why="política vigente", evidence="manual_comercial.pdf#12"),
+        domain="comercial",
+    )
+    ep = engine.observe(
+        "cliente:ABC:condicao",
+        "parcelado em 3x",
+        Source(name="CFO Denilson", kind=H),  # autoritativo no domínio comercial
+        Justification(why="exceção aprovada para este cliente"),
+        domain="comercial",
+    )
+    assert not ep.escalated
+    assert ep.risk is RiskLevel.MEDIUM
+    ativo = engine.active("cliente:ABC:condicao")
+    assert ativo.value == "parcelado em 3x"
+    # Linhagem preservada: o documento antigo ficou SUPERSEDED, não apagado.
+    superada = [
+        b for b in engine.history("cliente:ABC:condicao") if b.status is Status.SUPERSEDED
+    ]
+    assert len(superada) == 1
+    assert superada[0].value == "à vista"
+
+
 def test_D_conflito_verificavel_confere_na_fonte_de_verdade(engine):
     """(D) Conflito verificável: não discute, confere no SAP e adota o real."""
     engine.observe(
@@ -322,3 +356,16 @@ def test_heuristica_classifica_os_tres_casos():
     assert h.classify(None, "qualquer") is Relationship.INDEPENDENT
     assert h.classify(base, "30 DIAS") is Relationship.REINFORCES  # normaliza
     assert h.classify(base, "60 dias") is Relationship.CONTRADICTS
+
+
+def test_llm_classifier_fallback_incerto_e_contradiz():
+    """Correção 2: resposta incerta do LLM NÃO vira INDEPENDENT (escreveria por
+    fora do cético); o fallback binário conservador é CONTRADICTS."""
+    from cortex.memory.classifier import LLMClassifier
+
+    assert LLMClassifier._interpretar("reforça") is Relationship.REINFORCES
+    assert LLMClassifier._interpretar("Contradiz.") is Relationship.CONTRADICTS
+    # Incerto/vazio/None → CONTRADICTS (liga o ceticismo, não escreve calado).
+    assert LLMClassifier._interpretar("hmm, não sei dizer") is Relationship.CONTRADICTS
+    assert LLMClassifier._interpretar("") is Relationship.CONTRADICTS
+    assert LLMClassifier._interpretar(None) is Relationship.CONTRADICTS

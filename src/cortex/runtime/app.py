@@ -18,20 +18,41 @@ from cortex.governance.example_policy import construir_policy_exemplo
 from cortex.identity.models import Persona
 from cortex.memory.engine import MemoryEngine
 from cortex.memory.factory import criar_classifier, criar_store
-from cortex.memory.seams import DictAuthorityMap, DictSourceOfTruth
+from cortex.memory.seams import AuthorityMap, DictAuthorityMap, DictSourceOfTruth
 from cortex.runtime.loop import AgentLoop
 from cortex.runtime.mock_tools import criar_registry_mock
+from cortex.runtime.promotion import DOMINIO_PADRAO
 from cortex.runtime.providers import criar_provider
 
 logger = logging.getLogger("cortex.runtime")
 
 
-def montar_engine(config: CortexConfig, provider=None) -> MemoryEngine:
+def autoridade_da_persona(persona: Persona) -> AuthorityMap:
+    """Deriva o authority map do USER.md: o GESTOR é autoritativo no domínio.
+
+    Doutrina (§3): o USER.md é a base do authority map com nomes concretos.
+    Quem MANDA (o gestor do bloco autoridade) tem autoridade plena no domínio
+    da persona — sem isso, em runtime nenhum humano seria autoritativo (toda
+    correção humana cairia em 0.5) e a correção legítima do chefe escalaria
+    para... o próprio chefe.
+
+    Colegas NÃO entram: relacionamento ≠ autoridade (com quem TRABALHA não é
+    quem MANDA). SEAM: na Fase 6 isto vira configuração do Data Plane por
+    cliente, possivelmente com mais de um domínio e fontes de sistema.
+    """
+    return DictAuthorityMap({DOMINIO_PADRAO: {persona.user.autoridade.gestor.nome}})
+
+
+def montar_engine(
+    config: CortexConfig,
+    provider=None,
+    authority_map: AuthorityMap | None = None,
+) -> MemoryEngine:
     """Constrói o MemoryEngine segundo a config (classificador + store).
 
-    AuthorityMap e SourceOfTruth entram VAZIOS nesta fase — são SEAMs do Data
-    Plane (Fase 6) e do system of record / SAP (Fase 5). Sem eles, fontes de
-    tool ainda têm autoridade de sistema (0.9), suficiente para a 3c.
+    `authority_map=None` mantém o mapa vazio (compatibilidade). O runtime
+    completo passa o mapa derivado do USER.md (ver montar_runtime). A
+    SourceOfTruth entra VAZIA — SEAM do system of record / SAP (Fase 5).
     """
     if provider is None:
         provider = criar_provider(config)
@@ -40,7 +61,7 @@ def montar_engine(config: CortexConfig, provider=None) -> MemoryEngine:
     return MemoryEngine(
         store=store,
         classifier=classifier,
-        authority_map=DictAuthorityMap({}),
+        authority_map=authority_map or DictAuthorityMap({}),
         source_of_truth=DictSourceOfTruth({}),
     )
 
@@ -66,7 +87,7 @@ def montar_runtime(
     execuções). O provider é compartilhado entre o loop e o LLMClassifier.
     """
     provider = criar_provider(config)
-    engine = montar_engine(config, provider)
+    engine = montar_engine(config, provider, authority_map=autoridade_da_persona(persona))
     decision = montar_decision_engine(config, persona)
     registry = criar_registry_mock(persona.tools)
     loop = AgentLoop(

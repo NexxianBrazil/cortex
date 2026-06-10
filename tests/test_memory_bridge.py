@@ -30,9 +30,11 @@ from cortex.runtime import (
     LLMResponse,
     Session,
     ToolCall,
+    autoridade_da_persona,
     extrair_candidatos,
     recuperar_beliefs,
 )
+from cortex.runtime.promotion import DOMINIO_PADRAO
 from cortex.runtime.recall import formatar_beliefs
 
 PERSONAS_DIR = Path(__file__).resolve().parent.parent / "personas"
@@ -252,3 +254,18 @@ def test_criar_classifier_llm_com_provider():
 def test_criar_classifier_llm_sem_provider_falha():
     with pytest.raises(ConfiguracaoClassifierError, match="LLMProvider"):
         criar_classifier(CortexConfig(classifier="llm"))
+
+
+# ---------------------------------------------------------------------------
+# Correção 4: AuthorityMap derivado do USER.md (gestor é autoritativo)
+# ---------------------------------------------------------------------------
+
+
+def test_authority_map_deriva_do_user_md(persona):
+    """O gestor do USER.md é autoritativo no domínio; colegas não."""
+    amap = autoridade_da_persona(persona)
+    gestor = persona.user.autoridade.gestor.nome
+    assert amap.is_authoritative(gestor, DOMINIO_PADRAO)
+    # Relacionamento ≠ autoridade: nenhum colega é fonte autoritativa.
+    for colega in persona.user.relacionamento:
+        assert not amap.is_authoritative(colega.nome, DOMINIO_PADRAO)

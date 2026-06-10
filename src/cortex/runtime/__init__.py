@@ -5,7 +5,11 @@ configurável, executa tools mockadas e mantém estado EFÊMERO por sessão.
 Memória persistente (Fase 3) e governança (Fase 4) plugam por cima disto.
 """
 
-from cortex.runtime.app import montar_engine, montar_runtime
+from cortex.runtime.app import (
+    autoridade_da_persona,
+    montar_engine,
+    montar_runtime,
+)
 from cortex.runtime.loop import AgentLoop, LoopLimiteExcedidoError, montar_system_prompt
 from cortex.runtime.messages import LLMResponse, Message, Role, ToolCall
 from cortex.runtime.mock_tools import criar_registry_mock
@@ -49,6 +53,7 @@ __all__ = [
     "ToolError",
     "ToolNaoEncontradaError",
     "ToolRegistry",
+    "autoridade_da_persona",
     "criar_provider",
     "criar_registry_mock",
     "extrair_candidatos",

@@ -10,12 +10,12 @@ afirmou X e o agente decidiu Y'. Mesmo quando a crença é superada ou a
 afirmação é escalada/rejeitada, o episódio permanece intacto.
 """
 
-import itertools
 from datetime import datetime
 
 from pydantic import Field
 
 from cortex.memory.models import (
+    Contador,
     Justification,
     ModeloMemoria,
     Relationship,
@@ -24,7 +24,8 @@ from cortex.memory.models import (
 )
 from cortex.risk import RiskLevel
 
-_ids_episodio = itertools.count(1)
+# Público: a hidratação do GraphitiStore o avança (ver Contador em models.py).
+ids_episodio = Contador()
 
 
 class Episode(ModeloMemoria):
@@ -59,4 +60,4 @@ class Episode(ModeloMemoria):
     source_of_truth_value: str | None = None
     resulting_belief_id: int | None = None
 
-    id: int = Field(default_factory=lambda: next(_ids_episodio))
+    id: int = Field(default_factory=ids_episodio)

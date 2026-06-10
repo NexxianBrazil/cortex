@@ -256,3 +256,66 @@ def test_mariana_lembra_com_persistencia_real_em_disco(tmp_path):
         assert "1250" in system_usado
     finally:
         store2.close()
+
+
+# ---------------------------------------------------------------------------
+# Regressão (Correção 1): colisão de IDs entre sessões corrompia o banco
+# ---------------------------------------------------------------------------
+
+
+def test_ids_nao_colidem_apos_reabrir_em_processo_novo(tmp_path):
+    """Simula um PROCESSO NOVO (contadores zerados) reabrindo o banco.
+
+    Antes da correção, a 1ª ESCRITA da segunda sessão quebrava o checkpoint
+    com 'duplicated primary key' (contador recomeçava do 1 e colidia com os
+    ids hidratados) — e o DETACH DELETE prévio corrompia o banco. Agora a
+    hidratação avança os contadores para além do maior id persistido.
+    """
+    from cortex.memory import entity as entity_mod
+    from cortex.memory import episodic as episodic_mod
+    from cortex.memory import semantic as semantic_mod
+    from cortex.memory.models import Contador
+
+    db = tmp_path / "ids.kuzu"
+
+    # --- Sessão 1: grava 2 beliefs e fecha. ---
+    store1 = GraphitiStore(db)
+    eng1 = _novo_engine(store1)
+    eng1.observe(
+        "k:a", "v1", Source(name="t", kind=SourceKind.TOOL),
+        Justification(), domain="comercial",
+    )
+    eng1.observe(
+        "k:b", "v2", Source(name="t", kind=SourceKind.TOOL),
+        Justification(), domain="comercial",
+    )
+    store1.close()
+
+    # --- "Processo novo": zera os três contadores. ---
+    semantic_mod.ids_crenca = Contador()
+    episodic_mod.ids_episodio = Contador()
+    entity_mod.ids_entidade = Contador()
+
+    # --- Sessão 2: hidrata (deve avançar os contadores) e ESCREVE. ---
+    store2 = GraphitiStore(db)
+    try:
+        eng2 = _novo_engine(store2)
+        # A escrita abaixo quebrava aqui antes da correção.
+        eng2.observe(
+            "k:c", "v3", Source(name="t", kind=SourceKind.TOOL),
+            Justification(), domain="comercial",
+        )
+        ids = {b.id for b in store2.all_beliefs()}
+        assert len(ids) == 3  # nenhum id colidiu
+    finally:
+        store2.close()
+
+    # --- Sessão 3: reabre e confirma os 3 beliefs íntegros. ---
+    store3 = GraphitiStore(db)
+    try:
+        chaves = {b.key for b in store3.all_beliefs()}
+        ids3 = {b.id for b in store3.all_beliefs()}
+        assert chaves == {"k:a", "k:b", "k:c"}
+        assert len(ids3) == 3  # ids únicos preservados
+    finally:
+        store3.close()

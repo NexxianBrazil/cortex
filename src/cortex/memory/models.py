@@ -17,6 +17,35 @@ def agora() -> datetime:
     return datetime.now(UTC)
 
 
+class Contador:
+    """Gerador de ids sequenciais chamável, seguro com persistência durável.
+
+    Por que não um `itertools.count` solto: os ids viram PRIMARY KEY no backend
+    durável (Kuzu, Fase 3b). Num processo novo, um contador que recomeça do 1
+    COLIDE com os ids já hidratados do banco — a primeira escrita quebra o
+    checkpoint. Por isso a hidratação chama `garantir_minimo()` para avançar o
+    contador PARA ALÉM do maior id persistido.
+    """
+
+    def __init__(self, inicio: int = 1) -> None:
+        self._proximo = inicio
+
+    def __call__(self) -> int:
+        """Devolve o próximo id e avança."""
+        valor = self._proximo
+        self._proximo += 1
+        return valor
+
+    def garantir_minimo(self, proximo: int) -> None:
+        """Garante que o próximo id seja >= `proximo`. Só anda PARA FRENTE.
+
+        Nunca reduz o contador — seguro mesmo com vários stores no mesmo
+        processo (cada hidratação só pode empurrar o piso para cima).
+        """
+        if proximo > self._proximo:
+            self._proximo = proximo
+
+
 class ModeloMemoria(BaseModel):
     """Base comum: proíbe campos extras (typo vira erro, não silêncio)."""
 

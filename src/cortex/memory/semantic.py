@@ -10,12 +10,12 @@ Os DOIS scores, separados de propósito:
 Frequência não é verdade: uma correção autoritativa supera um erro repetido.
 """
 
-import itertools
 from datetime import datetime
 
 from pydantic import Field
 
 from cortex.memory.models import (
+    Contador,
     Justification,
     ModeloMemoria,
     Source,
@@ -23,9 +23,10 @@ from cortex.memory.models import (
     agora,
 )
 
-# Contador de ids de crença. Local ao processo; a 3b (Graphiti) vai assumir a
-# geração de id ao persistir — ver MemoryStore como SEAM de persistência.
-_ids_crenca = itertools.count(1)
+# Contador de ids de crença. Público (sem underscore) de propósito: a
+# hidratação do GraphitiStore o avança com garantir_minimo() para não colidir
+# com os ids já persistidos no Kuzu (ver Contador em models.py).
+ids_crenca = Contador()
 
 
 class Belief(ModeloMemoria):
@@ -51,7 +52,7 @@ class Belief(ModeloMemoria):
     last_seen: datetime = Field(default_factory=agora)
     reason_for_change: str | None = None
     supersedes: int | None = None  # id da crença que esta substitui
-    id: int = Field(default_factory=lambda: next(_ids_crenca))
+    id: int = Field(default_factory=ids_crenca)
 
     @property
     def salience(self) -> float:

@@ -10,15 +10,15 @@ fase posterior.
 SEAM documentado abaixo: onde a lógica de entidade vai crescer.
 """
 
-import itertools
 from datetime import datetime
 from enum import StrEnum
 
 from pydantic import Field
 
-from cortex.memory.models import ModeloMemoria, Source, agora
+from cortex.memory.models import Contador, ModeloMemoria, Source, agora
 
-_ids_entidade = itertools.count(1)
+# Público: a hidratação do GraphitiStore o avança (ver Contador em models.py).
+ids_entidade = Contador()
 
 
 class EntityKind(StrEnum):
@@ -63,7 +63,7 @@ class Entity(ModeloMemoria):
     name: str
     attributes: list[EntityAttribute] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=agora)
-    id: int = Field(default_factory=lambda: next(_ids_entidade))
+    id: int = Field(default_factory=ids_entidade)
 
     # ------------------------------------------------------------------ #
     # SEAM — lógica de entidade (fase posterior) conecta AQUI:

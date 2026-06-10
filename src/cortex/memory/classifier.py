@@ -51,20 +51,26 @@ class HeuristicClassifier(Classifier):
 class LLMClassifier(Classifier):
     """Classificação por LLM (Fase 3c) — usa a camada de LLMProvider da Fase 2.
 
-    Pede ao modelo a leitura semântica da relação (independente/reforça/
-    contradiz) entre a crença vigente e a afirmação nova — algo que a
-    igualdade literal da heurística não capta (ex.: '30 dias' vs 'um mês'
-    REFORÇA; '30 dias' vs 'trimestral' CONTRADIZ). Continua sendo opção de
-    config: o default e o CI usam a heurística determinística.
+    Pede ao modelo a leitura semântica da relação entre a crença vigente e a
+    afirmação nova — algo que a igualdade literal da heurística não capta
+    (ex.: '30 dias' vs 'um mês' REFORÇA; '30 dias' vs 'trimestral' CONTRADIZ).
+    Continua sendo opção de config: o default e o CI usam a heurística.
+
+    A decisão é BINÁRIA (reforça/contradiz) de propósito: `classify` só roda
+    quando JÁ existe crença para a MESMA chave de fato — 'independente' é
+    semanticamente impossível aqui (são afirmações sobre o mesmo assunto). Se
+    devolvêssemos INDEPENDENT, o observe() inseriria uma SEGUNDA crença ativa
+    para a mesma chave, sem supersessão, sem linhagem e SEM passar pelo cético
+    — a mutação silenciosa que o moat proíbe.
 
     Curto-circuito: sem crença vigente é sempre INDEPENDENTE — não gasta uma
-    chamada de LLM para o óbvio.
+    chamada de LLM para o óbvio (e aí 'independente' é correto).
     """
 
     _SYSTEM = (
-        "Você classifica a relação entre uma crença existente e uma afirmação "
-        "nova sobre o MESMO assunto. Responda com UMA palavra, sem pontuação: "
-        "'independente' (assuntos distintos), 'reforça' (mesmo sentido) ou "
+        "Você compara uma crença existente com uma afirmação nova sobre o MESMO "
+        "assunto (a mesma chave de fato). Responda com UMA palavra, sem "
+        "pontuação: 'reforça' (mesmo sentido, ainda que com outras palavras) ou "
         "'contradiz' (sentido conflitante)."
     )
 
@@ -82,7 +88,7 @@ class LLMClassifier(Classifier):
             content=(
                 f"Crença existente: '{existing.value}'.\n"
                 f"Afirmação nova: '{value}'.\n"
-                "A afirmação nova reforça, contradiz ou é independente?"
+                "A afirmação nova reforça ou contradiz a crença existente?"
             ),
         )
         resposta = self._provider.gerar(self._SYSTEM, [pergunta], [])
@@ -90,14 +96,14 @@ class LLMClassifier(Classifier):
 
     @staticmethod
     def _interpretar(texto: str | None) -> Relationship:
-        """Mapeia a resposta livre do LLM para o enum, tolerante a variações.
+        """Mapeia a resposta do LLM para o enum, binário e conservador.
 
-        Conservador no incerto: o que não casar com reforço/contradição cai em
-        INDEPENDENTE — não inventa um conflito que o modelo não afirmou.
+        Só REFORÇA quando o modelo claramente diz 'reforça'. QUALQUER outra
+        coisa (contradiz, vazio, ambíguo) → CONTRADICTS: conservador no incerto
+        LIGA o ceticismo. O pior caso é deliberar/escalar à toa — nunca escrever
+        por fora do cético (uma 2ª crença ativa sem supersessão).
         """
         t = normalizar(texto or "")
-        if "contrad" in t:
-            return Relationship.CONTRADICTS
         if "refor" in t:
             return Relationship.REINFORCES
-        return Relationship.INDEPENDENT
+        return Relationship.CONTRADICTS

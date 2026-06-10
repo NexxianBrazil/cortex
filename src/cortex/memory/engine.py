@@ -185,15 +185,20 @@ class MemoryEngine:
             )
             return
 
-        # Regra 2: não-verificável → avalia risco por autoridade/magnitude/razão.
-        auth_in = self._authority(source, domain)
-        auth_ex = existing.confidence
+        # Regra 2: não-verificável → avalia risco por confiança/magnitude/razão.
+        # IMPORTANTE: comparamos GRANDEZAS IGUAIS — `conf` (autoridade da nova +
+        # qualidade da justificação, já calculado no observe()) contra
+        # `existing.confidence` (mesma fórmula). Antes comparávamos a autoridade
+        # CRUA da nova (0–1.0) com a confiança da vigente (0–1.3): um gestor
+        # autoritativo no domínio (1.0) perdia para um documento bem justificado
+        # (0.9 + 0.2 = 1.1) e a correção do chefe escalava à toa — contra a
+        # doutrina "correção autoritativa sobrepõe".
         magnitude = self._magnitude_ratio(existing.value, value)
         grande = magnitude >= _MAGNITUDE_SUSPEITA
         sem_razao = justification.why is None
         dec["magnitude_ratio"] = round(magnitude, 1)
 
-        if auth_in >= auth_ex and not grande and not sem_razao:
+        if conf >= existing.confidence and not grande and not sem_razao:
             # Risco médio: delibera consigo, loga a razão, aceita e supera.
             dec["risk"] = RiskLevel.MEDIUM
             reason = justification.why or "correção de fonte de autoridade ≥"
@@ -208,8 +213,8 @@ class MemoryEngine:
         # Risco alto e não dá para conferir → ESCALA. Memória inalterada.
         dec["risk"] = RiskLevel.HIGH
         motivos = []
-        if auth_in < auth_ex:
-            motivos.append("fonte de autoridade menor que a vigente")
+        if conf < existing.confidence:
+            motivos.append("confiança (autoridade+justificação) menor que a da vigente")
         if grande:
             motivos.append(f"magnitude suspeita ({dec['magnitude_ratio']}x)")
         if sem_razao:
