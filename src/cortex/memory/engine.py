@@ -15,9 +15,10 @@ import logging
 
 from cortex.memory.classifier import Classifier
 from cortex.memory.episodic import Episode
+from cortex.memory.learning import Proposal, ProposalStatus
 from cortex.memory.models import (
     Justification,
-    ModeloMemoria,
+    Procedencia,
     Relationship,
     Source,
     SourceKind,
@@ -37,16 +38,16 @@ logger = logging.getLogger("cortex.memory")
 _MAGNITUDE_SUSPEITA = 5.0
 
 
-class PendingApproval(ModeloMemoria):
-    """Item da fila de aprovação humana — uma contradição de alto risco que o
-    agente se RECUSOU a absorver sozinho (memória fica inalterada até decisão).
+class AutoridadeInsuficienteError(Exception):
+    """Quem tenta decidir não é autoritativo no domínio da proposta.
+
+    Fecha o ciclo USER.md → authority map → decisão: só quem MANDA no domínio
+    pode aprovar/rejeitar uma proposta.
     """
 
-    key: str
-    current_value: str
-    proposed_value: str
-    source_name: str
-    reason: str
+
+class PropostaJaDecididaError(Exception):
+    """Tentativa de decidir uma proposta que já saiu de PENDENTE."""
 
 
 class MemoryEngine:
@@ -63,9 +64,13 @@ class MemoryEngine:
         self.classifier = classifier
         self.authority_map = authority_map
         self.source_of_truth = source_of_truth
-        self.pending_approvals: list[PendingApproval] = []
 
     # ---- leitura ---------------------------------------------------------- #
+
+    @property
+    def pending_approvals(self) -> list[Proposal]:
+        """Propostas pendentes — a Learning Queue persistida (não mais volátil)."""
+        return self.store.proposals(ProposalStatus.PENDENTE)
 
     def active(self, key: str) -> Belief | None:
         """A crença vigente: maior CONFIANÇA; empate desempata por SALIÊNCIA."""
@@ -90,14 +95,30 @@ class MemoryEngine:
     # ---- autoridade e magnitude ------------------------------------------ #
 
     def _authority(self, source: Source, domain: str) -> float:
-        """Autoridade da fonte no domínio → componente de verdade da confiança."""
-        if self.authority_map.is_authoritative(source.name, domain):
+        """Autoridade da fonte no domínio → componente de verdade da confiança.
+
+        A autoridade segue o CANAL, não o conteúdo (ver Procedencia):
+          - o branch autoritativo (1.0) só vale para procedência INTERNA — um
+            nome igual ao do gestor vindo de canal EXTERNO não compra 1.0
+            (anti-spoofing do authority map);
+          - procedência EXTERNA tem TETO 0.4 (abaixo do humano interno 0.5): o
+            cliente é dono do fato dele e a informação entra, mas qualquer
+            contradição relevante liga o cético e tende a escalar.
+        """
+        externa = source.procedencia is Procedencia.EXTERNA
+
+        # Autoridade plena por authority map: SÓ para canal interno autenticado.
+        if not externa and self.authority_map.is_authoritative(source.name, domain):
             return 1.0
+
         if source.kind in (SourceKind.SYSTEM, SourceKind.TOOL, SourceKind.DOCUMENT):
-            return 0.9
-        if source.kind is SourceKind.HUMAN:
-            return 0.5
-        return 0.2  # inferência do agente / desconhecido
+            base = 0.9
+        elif source.kind is SourceKind.HUMAN:
+            base = 0.5
+        else:
+            base = 0.2  # inferência do agente / desconhecido
+
+        return min(base, 0.4) if externa else base
 
     def _magnitude_ratio(self, a: str, b: str) -> float:
         """Razão entre dois valores numéricos (1.0 quando não dá para comparar)."""
@@ -165,6 +186,25 @@ class MemoryEngine:
             **dec,
         )
         self.store.add_episode(episodio)
+
+        # Escalonamento → cria a PROPOSTA (Learning Queue, Plano 6). Ponto ÚNICO
+        # de criação: os ramos só preencheram dec["escalated"]; o warrant
+        # completo (com a linhagem ao episódio de origem) nasce aqui.
+        if dec["escalated"]:
+            self.store.add_proposal(
+                Proposal(
+                    key=key,
+                    current_value=existing.value if existing is not None else None,
+                    proposed_value=value,
+                    source=source,
+                    justification=justification,
+                    domain=domain,
+                    risk=dec["risk"],
+                    reason=dec["reason"] or "",
+                    origin_episode_id=episodio.id,
+                )
+            )
+
         logger.info(
             "observe key=%s rel=%s risco=%s ação=%s",
             key,
@@ -220,19 +260,11 @@ class MemoryEngine:
         if sem_razao:
             motivos.append("veio sem razão")
         motivo = "; ".join(motivos)
-        self.pending_approvals.append(
-            PendingApproval(
-                key=key,
-                current_value=existing.value,
-                proposed_value=value,
-                source_name=source.name,
-                reason=motivo,
-            )
-        )
         dec["action"] = "ESCALOU para humano (memória inalterada)"
         dec["reason"] = motivo
         dec["escalated"] = True
-        # resulting_belief_id fica None: nada mudou na semântica.
+        # resulting_belief_id fica None: nada mudou na semântica. A PROPOSTA é
+        # criada no observe() (ponto único), a partir de dec["escalated"].
 
     # ---- verificável: confere contra a fonte de verdade ------------------- #
 
@@ -252,18 +284,8 @@ class MemoryEngine:
         if not consulta.found:
             # Verificável, mas a fonte está indisponível: escala com cautela.
             dec["risk"] = RiskLevel.HIGH
-            motivo = "verificável, mas fonte de verdade indisponível"
-            self.pending_approvals.append(
-                PendingApproval(
-                    key=key,
-                    current_value=existing.value,
-                    proposed_value=value,
-                    source_name=source.name,
-                    reason=motivo,
-                )
-            )
             dec["action"] = "ESCALOU (não consegui conferir)"
-            dec["reason"] = motivo
+            dec["reason"] = "verificável, mas fonte de verdade indisponível"
             dec["escalated"] = True
             return
 
@@ -298,6 +320,130 @@ class MemoryEngine:
             dec["action"] = f"conferiu: nenhum batia; gravou o real ({truth})"
             dec["reason"] = "ambos divergiam da fonte de verdade"
             dec["resulting_belief_id"] = nova.id
+
+    # ---- decisão humana sobre a Learning Queue (Plano 6) ------------------ #
+
+    def _validar_decisao(self, proposal_id: int, autor: str) -> Proposal:
+        """Garante que a proposta existe, está PENDENTE e que `autor` pode decidir.
+
+        Governança: só quem é autoritativo no domínio da proposta decide — o
+        ciclo USER.md → authority map → decisão.
+        """
+        p = self.store.proposal_by_id(proposal_id)
+        if p is None:
+            raise ValueError(f"proposta {proposal_id} inexistente")
+        if p.status is not ProposalStatus.PENDENTE:
+            raise PropostaJaDecididaError(
+                f"proposta {proposal_id} já está {p.status.value}"
+            )
+        if not self.authority_map.is_authoritative(autor, p.domain):
+            raise AutoridadeInsuficienteError(
+                f"'{autor}' não é autoritativo no domínio '{p.domain}' — não pode decidir"
+            )
+        return p
+
+    def _registrar_decisao(
+        self,
+        p: Proposal,
+        autor: str,
+        *,
+        action: str,
+        reason: str,
+        resulting_belief_id: int | None,
+        escalated: bool = False,
+    ) -> Episode:
+        """Gera o episódio da decisão humana — a decisão é MEMÓRIA com autor.
+
+        A fonte é o humano que decidiu (HUMAN, canal interno). Gravar o episódio
+        dispara o checkpoint do GraphitiStore, que captura também a mutação de
+        status da proposta no working set (mesmo mecanismo do reforço de crença).
+        """
+        episodio = Episode(
+            key=p.key,
+            asserted_value=p.proposed_value,
+            source=Source(name=autor, kind=SourceKind.HUMAN),
+            justification=Justification(why=reason),
+            domain=p.domain,
+            relationship=Relationship.CONTRADICTS,
+            risk=p.risk,
+            action=action,
+            reason=reason,
+            escalated=escalated,
+            resulting_belief_id=resulting_belief_id,
+        )
+        self.store.add_episode(episodio)
+        return episodio
+
+    def aprovar(self, proposal_id: int, autor: str, razao: str) -> Episode:
+        """Humano autoritativo APROVA a proposta: aplica a escrita governada.
+
+        Checa CADUCIDADE: se a crença vigente da chave mudou desde o
+        escalonamento, a proposta não se aplica (aplicar uma escrita aprovada
+        sobre um mundo que já mudou seria mutação cega) — status CADUCADA e
+        episódio explicando. Caso vigente, aplica a supersessão (ou inserção,
+        se era assunto novo) com a FONTE e a JUSTIFICAÇÃO ORIGINAIS — quem
+        afirmou continua autor do fato; o humano apenas autoriza.
+        """
+        p = self._validar_decisao(proposal_id, autor)
+
+        vigente = self.active(p.key)
+        vigente_valor = vigente.value if vigente is not None else None
+        if vigente_valor != p.current_value:
+            p.status = ProposalStatus.CADUCADA
+            p.decided_at = agora()
+            p.decided_by = autor
+            p.decision_reason = razao
+            return self._registrar_decisao(
+                p,
+                autor,
+                action="proposta caducou: a crença vigente mudou desde o escalonamento",
+                reason=razao,
+                resulting_belief_id=None,
+            )
+
+        conf = round(self._authority(p.source, p.domain) + p.justification.quality(), 2)
+        reason_change = f"aprovado por {autor}: {razao}"
+        if vigente is None:
+            nova = self._insert(
+                p.key, p.proposed_value, p.source, p.justification, p.domain, conf
+            )
+            nova.reason_for_change = reason_change
+        else:
+            nova = self._supersede(
+                vigente, p.proposed_value, p.source, p.justification, p.domain,
+                conf, reason_change,
+            )
+
+        p.status = ProposalStatus.APROVADA
+        p.decided_at = agora()
+        p.decided_by = autor
+        p.decision_reason = razao
+        return self._registrar_decisao(
+            p,
+            autor,
+            action=f"humano APROVOU a proposta {p.id} — crença superada",
+            reason=razao,
+            resulting_belief_id=nova.id,
+        )
+
+    def rejeitar(self, proposal_id: int, autor: str, razao: str) -> Episode:
+        """Humano autoritativo REJEITA: memória INALTERADA, mas vira episódio.
+
+        A rejeição é episódio de PRIMEIRA CLASSE — revisitável numa conversa
+        futura ('o chefe pode errar'). A governança presta contas dos dois lados.
+        """
+        p = self._validar_decisao(proposal_id, autor)
+        p.status = ProposalStatus.REJEITADA
+        p.decided_at = agora()
+        p.decided_by = autor
+        p.decision_reason = razao
+        return self._registrar_decisao(
+            p,
+            autor,
+            action=f"humano REJEITOU a proposta {p.id} — memória inalterada",
+            reason=razao,
+            resulting_belief_id=None,
+        )
 
     # ---- mutações internas (nunca deletam) -------------------------------- #
 

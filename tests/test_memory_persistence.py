@@ -319,3 +319,112 @@ def test_ids_nao_colidem_apos_reabrir_em_processo_novo(tmp_path):
         assert len(ids3) == 3  # ids únicos preservados
     finally:
         store3.close()
+
+
+# ---------------------------------------------------------------------------
+# Learning Queue persistida (Fase 4b): sobrevive a restart
+# ---------------------------------------------------------------------------
+
+
+def test_proposta_sobrevive_e_decisao_persiste(tmp_path):
+    """Restart não perde a fila: proposta PENDENTE sobrevive; aprovar na 2ª
+    sessão funciona; o estado decidido + episódio sobrevivem à 3ª reabertura."""
+    from cortex.memory import DictAuthorityMap, ProposalStatus
+
+    db = tmp_path / "fila.kuzu"
+    gestor = "CFO Denilson"
+
+    def _eng(store):
+        return MemoryEngine(
+            store=store,
+            classifier=HeuristicClassifier(),
+            authority_map=DictAuthorityMap({"comercial": {gestor}}),
+            source_of_truth=DictSourceOfTruth({}),
+        )
+
+    # --- Sessão 1: escala (cria proposta pendente) e fecha. ---
+    store1 = GraphitiStore(db)
+    eng1 = _eng(store1)
+    eng1.observe(
+        "cliente:X:limite", "R$ 50.000", Source(name=gestor, kind=H),
+        Justification(why="crédito"), domain="comercial",
+    )
+    eng1.observe(
+        "cliente:X:limite", "R$ 500.000", Source(name="Estagiário", kind=H),
+        Justification(), domain="comercial",
+    )
+    pid = eng1.pending_approvals[-1].id
+    store1.close()
+
+    # --- Sessão 2: a proposta sobreviveu; aprovar funciona. ---
+    store2 = GraphitiStore(db)
+    try:
+        eng2 = _eng(store2)
+        pend = eng2.store.proposals(ProposalStatus.PENDENTE)
+        assert len(pend) == 1 and pend[0].id == pid
+        eng2.aprovar(pid, autor=gestor, razao="aprovado em comitê")
+        assert eng2.active("cliente:X:limite").value == "R$ 500.000"
+    finally:
+        store2.close()
+
+    # --- Sessão 3: o estado decidido e o episódio sobreviveram. ---
+    store3 = GraphitiStore(db)
+    try:
+        eng3 = _eng(store3)
+        p = eng3.store.proposal_by_id(pid)
+        assert p.status is ProposalStatus.APROVADA
+        assert p.decided_by == gestor
+        assert eng3.active("cliente:X:limite").value == "R$ 500.000"
+        # O episódio da decisão (autor como fonte) sobreviveu.
+        eps = eng3.store.episodes_for("cliente:X:limite")
+        assert any("APROVOU" in e.action and e.source.name == gestor for e in eps)
+    finally:
+        store3.close()
+
+
+def test_ids_proposta_nao_colidem_apos_reabrir_em_processo_novo(tmp_path):
+    """ids_proposta avança na hidratação (mesma classe de bug da colisão de PK)."""
+    from cortex.memory import DictAuthorityMap
+    from cortex.memory import learning as learning_mod
+    from cortex.memory.models import Contador
+
+    db = tmp_path / "fila_ids.kuzu"
+    gestor = "CFO Denilson"
+
+    def _eng(store):
+        return MemoryEngine(
+            store=store,
+            classifier=HeuristicClassifier(),
+            authority_map=DictAuthorityMap({"comercial": {gestor}}),
+            source_of_truth=DictSourceOfTruth({}),
+        )
+
+    store1 = GraphitiStore(db)
+    eng1 = _eng(store1)
+    eng1.observe(
+        "k", "R$ 50.000", Source(name=gestor, kind=H), Justification(why="x"), domain="comercial",
+    )
+    eng1.observe(
+        "k", "R$ 500.000", Source(name="Estagiário", kind=H), Justification(), domain="comercial",
+    )
+    store1.close()
+
+    # "Processo novo": zera o contador de propostas.
+    learning_mod.ids_proposta = Contador()
+
+    store2 = GraphitiStore(db)
+    try:
+        eng2 = _eng(store2)
+        # Nova escala → nova proposta; não pode colidir com a hidratada.
+        eng2.observe(
+            "k2", "R$ 10.000", Source(name=gestor, kind=H),
+            Justification(why="y"), domain="comercial",
+        )
+        eng2.observe(
+            "k2", "R$ 100.000", Source(name="Estagiário", kind=H),
+            Justification(), domain="comercial",
+        )
+        ids = {p.id for p in eng2.store.proposals()}
+        assert len(ids) == 2  # nenhuma colisão
+    finally:
+        store2.close()

@@ -8,13 +8,16 @@ ponto de extensão natural.
 Invariantes que qualquer backend deve honrar:
   - a episódica é append-only (nunca remove um episódio);
   - a semântica nunca apaga: supersessão é rebaixamento de status, e tanto a
-    crença ativa quanto as superadas continuam recuperáveis por `beliefs_for`.
+    crença ativa quanto as superadas continuam recuperáveis por `beliefs_for`;
+  - a Learning Queue (Plano 6) nunca remove uma proposta: a decisão muda o
+    status e gera episódio com autor (ver add_proposal/proposals).
 """
 
 from abc import ABC, abstractmethod
 
 from cortex.memory.entity import Entity
 from cortex.memory.episodic import Episode
+from cortex.memory.learning import Proposal, ProposalStatus
 from cortex.memory.semantic import Belief
 
 
@@ -56,6 +59,19 @@ class MemoryStore(ABC):
     def entities(self) -> list[Entity]:
         """Todas as entidades conhecidas."""
 
+    # --- learning queue (Plano 6) ---
+    @abstractmethod
+    def add_proposal(self, proposal: Proposal) -> None:
+        """Acrescenta uma proposta. Nunca substitui — a decisão muda o status."""
+
+    @abstractmethod
+    def proposals(self, status: ProposalStatus | None = None) -> list[Proposal]:
+        """Todas as propostas, ou filtradas por status."""
+
+    @abstractmethod
+    def proposal_by_id(self, proposal_id: int) -> Proposal | None:
+        """A proposta com aquele id, ou None."""
+
 
 class InMemoryStore(MemoryStore):
     """Default desta fase: tudo em estruturas Python na memória do processo.
@@ -69,6 +85,7 @@ class InMemoryStore(MemoryStore):
         self._crencas: dict[str, list[Belief]] = {}
         self._episodios: list[Episode] = []
         self._entidades: dict[int, Entity] = {}
+        self._propostas: dict[int, Proposal] = {}
 
     def add_belief(self, belief: Belief) -> None:
         self._crencas.setdefault(belief.key, []).append(belief)
@@ -91,6 +108,18 @@ class InMemoryStore(MemoryStore):
     def entities(self) -> list[Entity]:
         return list(self._entidades.values())
 
+    def add_proposal(self, proposal: Proposal) -> None:
+        self._propostas[proposal.id] = proposal
+
+    def proposals(self, status: ProposalStatus | None = None) -> list[Proposal]:
+        todas = list(self._propostas.values())
+        if status is None:
+            return todas
+        return [p for p in todas if p.status is status]
+
+    def proposal_by_id(self, proposal_id: int) -> Proposal | None:
+        return self._propostas.get(proposal_id)
+
     # --- helpers de iteração (leitura) ---
     # Não fazem parte do contrato MemoryStore; existem para um backend de
     # persistência (GraphitiStore) usar este store como working set e
@@ -107,3 +136,7 @@ class InMemoryStore(MemoryStore):
     def all_entities(self) -> list[Entity]:
         """Todas as entidades conhecidas."""
         return list(self._entidades.values())
+
+    def all_proposals(self) -> list[Proposal]:
+        """Todas as propostas (qualquer status)."""
+        return list(self._propostas.values())

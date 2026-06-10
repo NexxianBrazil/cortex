@@ -62,6 +62,18 @@ class SourceKind(StrEnum):
     AGENT = "inferência do agente"
 
 
+class Procedencia(StrEnum):
+    """Canal de origem da informação — base do tratamento de entrada confiável.
+
+    A autoridade segue o CANAL autenticado, NUNCA o conteúdo. Sem isto, um
+    e-mail externo poderia alegar 'CFO Denilson' e comprar 1.0 no authority
+    map (spoofing). A procedência fecha esse furo.
+    """
+
+    INTERNA = "interna"  # canal autenticado: operador logado, sistema interno, tool da infra
+    EXTERNA = "externa"  # conteúdo autorado fora: e-mail de cliente, WhatsApp, doc recebido
+
+
 class Relationship(StrEnum):
     """Relação de uma afirmação nova com a crença vigente.
 
@@ -83,10 +95,24 @@ class Status(StrEnum):
 
 
 class Source(ModeloMemoria):
-    """Quem afirmou: nome e natureza. Base da autoridade e da linhagem."""
+    """Quem afirmou: nome, natureza e procedência. Base da autoridade e linhagem.
+
+    REGRA DE OURO da procedência: qualquer conector que ingerir conteúdo
+    autorado FORA da empresa (Fase 5) DEVE marcar `EXTERNA`. A procedência vem
+    do TRANSPORTE (o canal autenticado por onde a mensagem chegou), NUNCA do
+    texto da mensagem — senão o atacante a escolhe. Default INTERNA por
+    compatibilidade: todas as fontes atuais (operador, tools da infra) são
+    internas.
+
+    Corolário: dado EXTERNO é EVIDÊNCIA a avaliar, nunca INSTRUÇÃO. O
+    tratamento profundo de prompt injection no contexto do loop é da Fase 5
+    (junto com os conectores reais); aqui mora só a regra arquitetural de que
+    a procedência limita a autoridade (ver MemoryEngine._authority).
+    """
 
     name: str
     kind: SourceKind
+    procedencia: Procedencia = Procedencia.INTERNA
 
 
 class Justification(ModeloMemoria):

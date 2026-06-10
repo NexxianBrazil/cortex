@@ -18,7 +18,11 @@ from cortex.memory.classifier import (
     HeuristicClassifier,
     LLMClassifier,
 )
-from cortex.memory.engine import MemoryEngine, PendingApproval
+from cortex.memory.engine import (
+    AutoridadeInsuficienteError,
+    MemoryEngine,
+    PropostaJaDecididaError,
+)
 from cortex.memory.entity import (
     AttributeOrigin,
     Entity,
@@ -32,8 +36,10 @@ from cortex.memory.factory import (
     criar_classifier,
     criar_store,
 )
+from cortex.memory.learning import Proposal, ProposalStatus
 from cortex.memory.models import (
     Justification,
+    Procedencia,
     Relationship,
     Source,
     SourceKind,
@@ -53,6 +59,7 @@ from cortex.memory.store import InMemoryStore, MemoryStore
 __all__ = [
     "AttributeOrigin",
     "AuthorityMap",
+    "AutoridadeInsuficienteError",
     "Belief",
     "Classifier",
     "ConfiguracaoClassifierError",
@@ -69,7 +76,10 @@ __all__ = [
     "LLMClassifier",
     "MemoryEngine",
     "MemoryStore",
-    "PendingApproval",
+    "Procedencia",
+    "Proposal",
+    "ProposalStatus",
+    "PropostaJaDecididaError",
     "Relationship",
     "Source",
     "SourceKind",

@@ -18,6 +18,7 @@ from cortex.memory import (
     InMemoryStore,
     Justification,
     MemoryEngine,
+    Procedencia,
     Relationship,
     Source,
     SourceKind,
@@ -369,3 +370,49 @@ def test_llm_classifier_fallback_incerto_e_contradiz():
     assert LLMClassifier._interpretar("hmm, não sei dizer") is Relationship.CONTRADICTS
     assert LLMClassifier._interpretar("") is Relationship.CONTRADICTS
     assert LLMClassifier._interpretar(None) is Relationship.CONTRADICTS
+
+
+# ---------------------------------------------------------------------------
+# Procedência de fonte (Fase 4b): autoridade segue o CANAL, não o conteúdo
+# ---------------------------------------------------------------------------
+
+
+def test_fonte_externa_com_nome_de_gestor_nao_compra_autoridade(engine):
+    """Spoofing: e-mail externo alegando 'CFO Denilson' NÃO ganha 1.0 — escala.
+
+    A MESMA afirmação por canal interno (o gestor de verdade) delibera e supera.
+    """
+    engine.observe(
+        "cliente:ABC:desconto", "5%", Source(name="Vendedor João", kind=H),
+        Justification(why="tabela padrão"), domain="comercial",
+    )
+    # Canal EXTERNO se passando pelo gestor → não autoritativo → escala.
+    ep_ext = engine.observe(
+        "cliente:ABC:desconto", "10%",
+        Source(name="CFO Denilson", kind=H, procedencia=Procedencia.EXTERNA),
+        Justification(why="liberado por e-mail"), domain="comercial",
+    )
+    assert ep_ext.escalated
+    assert engine.active("cliente:ABC:desconto").value == "5%"  # inalterado
+
+    # Mesma afirmação, canal INTERNO (o gestor de verdade) → delibera e supera.
+    ep_int = engine.observe(
+        "cliente:ABC:desconto", "10%",
+        Source(name="CFO Denilson", kind=H),  # procedência default INTERNA
+        Justification(why="renegociação aprovada"), domain="comercial",
+    )
+    assert not ep_int.escalated
+    assert engine.active("cliente:ABC:desconto").value == "10%"
+
+
+def test_autoridade_externa_tem_teto_de_0_4(engine):
+    """Fonte EXTERNA aceita como assunto novo carrega confiança <= 0.4 (+ qualidade)."""
+    engine.observe(
+        "cliente:Y:contato", "11-99999-0000",
+        Source(name="Cliente", kind=SourceKind.HUMAN, procedencia=Procedencia.EXTERNA),
+        Justification(), domain="comercial",
+    )
+    ativo = engine.active("cliente:Y:contato")
+    assert ativo is not None
+    # Autoridade externa teto 0.4; sem justificação extra, confiança = 0.4.
+    assert ativo.confidence <= 0.4
