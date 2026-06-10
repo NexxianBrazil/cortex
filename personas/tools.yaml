@@ -68,3 +68,11 @@ tools:
         tipo: array
         descricao: Documentos anexados (ex. o PDF da cotação)
         obrigatorio: false
+      - nome: promete_condicao
+        tipo: boolean
+        descricao: O e-mail promete desconto/prazo/condição comercial ao cliente?
+        obrigatorio: false
+      - nome: cotacao_emitida
+        tipo: boolean
+        descricao: Há cotação formal emitida que dê lastro à condição prometida?
+        obrigatorio: false

@@ -15,7 +15,7 @@ import logging
 
 from cortex.memory.classifier import Classifier
 from cortex.memory.episodic import Episode
-from cortex.memory.learning import Proposal, ProposalStatus
+from cortex.memory.learning import Proposal, ProposalKind, ProposalStatus
 from cortex.memory.models import (
     Justification,
     Procedencia,
@@ -386,6 +386,23 @@ class MemoryEngine:
         """
         p = self._validar_decisao(proposal_id, autor)
 
+        # Proposta de AÇÃO (Fase 4c): SEM escrita de crença e SEM caducidade
+        # (não se aplica). Aprovar = liberar a exceção one-shot; consumida
+        # depois pelo DecisionEngine via consumir_excecao.
+        if p.kind is ProposalKind.ACAO:
+            tool = p.key.removeprefix("acao:")
+            p.status = ProposalStatus.APROVADA
+            p.decided_at = agora()
+            p.decided_by = autor
+            p.decision_reason = razao
+            return self._registrar_decisao(
+                p,
+                autor,
+                action=f"humano APROVOU a ação {tool} (proposta {p.id})",
+                reason=razao,
+                resulting_belief_id=None,
+            )
+
         vigente = self.active(p.key)
         vigente_valor = vigente.value if vigente is not None else None
         if vigente_valor != p.current_value:
@@ -437,13 +454,48 @@ class MemoryEngine:
         p.decided_at = agora()
         p.decided_by = autor
         p.decision_reason = razao
+        if p.kind is ProposalKind.ACAO:
+            tool = p.key.removeprefix("acao:")
+            action = f"humano REJEITOU a ação {tool} (proposta {p.id})"
+        else:
+            action = f"humano REJEITOU a proposta {p.id} — memória inalterada"
         return self._registrar_decisao(
-            p,
-            autor,
-            action=f"humano REJEITOU a proposta {p.id} — memória inalterada",
-            reason=razao,
-            resulting_belief_id=None,
+            p, autor, action=action, reason=razao, resulting_belief_id=None
         )
+
+    def consumir_excecao(self, tool: str, argumentos_json: str) -> Proposal | None:
+        """Consome (one-shot) uma exceção de AÇÃO aprovada para esta chamada.
+
+        Procura proposta ACAO + APROVADA + NÃO consumida cujo proposed_value
+        bata EXATAMENTE com `argumentos_json` (match exato de tool+args — a
+        aprovação não é carta branca, é para AQUELA chamada). Se achar, marca
+        consumed_at, registra um episódio e devolve a proposta; senão, None.
+
+        Injetada no DecisionEngine como callable (a governança não importa a
+        memória). Gravar o episódio dispara o checkpoint do GraphitiStore, que
+        captura a mutação de consumed_at no working set.
+        """
+        chave = f"acao:{tool}"
+        for p in self.store.proposals(ProposalStatus.APROVADA):
+            if (
+                p.kind is ProposalKind.ACAO
+                and p.consumed_at is None
+                and p.key == chave
+                and p.proposed_value == argumentos_json
+            ):
+                p.consumed_at = agora()
+                self._registrar_decisao(
+                    p,
+                    p.decided_by or "humano",
+                    action=(
+                        f"exceção da proposta {p.id} consumida — ação executada "
+                        "com aprovação humana"
+                    ),
+                    reason="exceção one-shot consumida",
+                    resulting_belief_id=None,
+                )
+                return p
+        return None
 
     # ---- mutações internas (nunca deletam) -------------------------------- #
 

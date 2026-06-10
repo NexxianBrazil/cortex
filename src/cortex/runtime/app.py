@@ -13,7 +13,12 @@ não conhece o runtime (o LLMProvider para o LLMClassifier é injetado aqui).
 import logging
 
 from cortex.config import CortexConfig
-from cortex.governance.engine import DecisionEngine, DecisionMode
+from cortex.governance.audit import AuditTrail
+from cortex.governance.engine import (
+    DecisionEngine,
+    DecisionMode,
+    InvarianteSemLinhagemError,
+)
 from cortex.governance.example_policy import construir_policy_exemplo
 from cortex.identity.models import Persona
 from cortex.memory.engine import MemoryEngine
@@ -66,15 +71,43 @@ def montar_engine(
     )
 
 
-def montar_decision_engine(config: CortexConfig, persona: Persona) -> DecisionEngine:
+def _validar_linhagem_invariantes(policy, persona: Persona) -> None:
+    """Todo invariante deve citar um comportamento que EXISTE no SOUL.
+
+    A formação é a fonte; a policy é a materialização. Invariante órfão é erro
+    de config — falha alto na montagem (doutrina §6.1).
+    """
+    ids_soul = {c.id for c in persona.soul.comportamentos}
+    for inv in policy.invariantes:
+        if inv.soul_behavior_id not in ids_soul:
+            raise InvarianteSemLinhagemError(
+                f"invariante da tool '{inv.tool}' cita comportamento "
+                f"'{inv.soul_behavior_id}' inexistente no SOUL de {persona.soul.nome}"
+            )
+
+
+def montar_decision_engine(
+    config: CortexConfig,
+    persona: Persona,
+    buscar_excecao=None,
+    audit=None,
+) -> DecisionEngine:
     """Constrói o Decision Engine com a policy de exemplo e o modo da config.
 
     A policy de exemplo deriva o risco base de cada ToolDeclaration da persona
-    e anexa os escaladores seed (ver governance/example_policy.py). O modo
-    (observe/enforce) vem da config — default observe.
+    e anexa os escaladores + invariantes seed (ver example_policy.py). Valida a
+    LINHAGEM dos invariantes ao SOUL. O modo (observe/enforce) vem da config.
+    `buscar_excecao` (consumir_excecao da memória) e `audit` são injetados pelo
+    runtime — a governança não importa a memória nem o audit diretamente.
     """
     policy = construir_policy_exemplo(persona.tools)
-    return DecisionEngine(policy, mode=DecisionMode(config.decision_mode))
+    _validar_linhagem_invariantes(policy, persona)
+    return DecisionEngine(
+        policy,
+        mode=DecisionMode(config.decision_mode),
+        buscar_excecao=buscar_excecao,
+        audit=audit,
+    )
 
 
 def montar_runtime(
@@ -88,7 +121,10 @@ def montar_runtime(
     """
     provider = criar_provider(config)
     engine = montar_engine(config, provider, authority_map=autoridade_da_persona(persona))
-    decision = montar_decision_engine(config, persona)
+    audit = AuditTrail(config.audit_path) if config.audit else None
+    decision = montar_decision_engine(
+        config, persona, buscar_excecao=engine.consumir_excecao, audit=audit
+    )
     registry = criar_registry_mock(persona.tools)
     loop = AgentLoop(
         provider,
@@ -97,5 +133,6 @@ def montar_runtime(
         memory=engine,
         recall_limite=config.memoria_recall_max,
         decision=decision,
+        audit=audit,
     )
     return loop, engine

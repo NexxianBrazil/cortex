@@ -49,16 +49,25 @@ class Message(BaseModel):
     erro: bool = False
 
 
+class TokenUsage(BaseModel):
+    """Custo em tokens de UM request de LLM — base da telemetria de custo (4c)."""
+
+    input_tokens: int
+    output_tokens: int
+
+
 class LLMResponse(BaseModel):
     """Resposta normalizada de QUALQUER provedor.
 
     Ou o LLM pediu tools (`tool_calls` não vazio), ou respondeu em texto
     (`texto`). O loop decide o próximo passo só olhando para isto — nunca
-    para o formato bruto do provedor.
+    para o formato bruto do provedor. `uso` carrega o custo do request quando
+    o provedor o reporta (Stub devolve None — determinístico, sem custo).
     """
 
     texto: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    uso: TokenUsage | None = None
 
     @model_validator(mode="after")
     def _validar_conteudo(self) -> "LLMResponse":

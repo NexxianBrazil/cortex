@@ -31,6 +31,9 @@ htmlcov/
 *.kuzu.wal
 *.kuzu.tmp/
 
+# Trilha de auditoria local (Audit Engine — Fase 4c, Data Plane on-prem)
+audit/
+
 # IDEs / editores
 .idea/
 .vscode/

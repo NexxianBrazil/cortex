@@ -428,3 +428,44 @@ def test_ids_proposta_nao_colidem_apos_reabrir_em_processo_novo(tmp_path):
         assert len(ids) == 2  # nenhuma colisão
     finally:
         store2.close()
+
+
+def test_proposta_acao_sobrevive_reabertura(tmp_path):
+    """Proposta kind=ACAO (com consumed_at) sobrevive a fechar/reabrir o store."""
+    from cortex.memory import DictAuthorityMap, ProposalKind, propor_acao
+    from cortex.risk import RiskLevel
+
+    db = tmp_path / "acao.kuzu"
+
+    def _eng(store):
+        return MemoryEngine(
+            store=store,
+            classifier=HeuristicClassifier(),
+            authority_map=DictAuthorityMap({"comercial": {"CFO Denilson"}}),
+            source_of_truth=DictSourceOfTruth({}),
+        )
+
+    args = {"destinatario": "cliente@gmail.com", "assunto": "x", "corpo": "y"}
+    store1 = GraphitiStore(db)
+    eng1 = _eng(store1)
+    prop = propor_acao("enviar_email", args, RiskLevel.HIGH, ["externo"], "Mariana", "comercial")
+    eng1.store.add_proposal(prop)
+    eng1.aprovar(prop.id, autor="CFO Denilson", razao="ok")
+    pid = prop.id
+    store1.close()
+
+    store2 = GraphitiStore(db)
+    try:
+        eng2 = _eng(store2)
+        p = eng2.store.proposal_by_id(pid)
+        assert p is not None
+        assert p.kind is ProposalKind.ACAO
+        assert p.status.value == "aprovada"
+        assert p.consumed_at is None  # aprovada mas ainda não consumida
+        # A exceção sobrevivente é consumível na nova sessão.
+        import json
+
+        aj = json.dumps(args, ensure_ascii=False, sort_keys=True)
+        assert eng2.consumir_excecao("enviar_email", aj) is not None
+    finally:
+        store2.close()

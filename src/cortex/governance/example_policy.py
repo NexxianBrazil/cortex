@@ -14,6 +14,7 @@ from collections.abc import Mapping
 
 from cortex.governance.policy import (
     Condition,
+    Invariante,
     Operador,
     RiskEscalator,
     RiskPolicy,
@@ -59,6 +60,26 @@ ESCALADORES_SEED: dict[str, list[RiskEscalator]] = {
     # consultar_preco: somente leitura — sem escaladores, sempre o base (LOW).
 }
 
+# Invariantes de FORMAÇÃO (piso inviolável). Cada um cita o comportamento do
+# SOUL que o motiva — a montagem valida que esse id existe na persona.
+INVARIANTES_SEED: list[Invariante] = [
+    # nao_prometer_sem_lastro: prometer condição comercial (desconto/prazo) ao
+    # cliente sem uma cotação emitida que dê lastro é proibido pela formação —
+    # não é caro/arriscado, é CONTRA O CARÁTER. Não é aprovável pela fila.
+    Invariante(
+        tool="enviar_email",
+        condicoes=[
+            Condition(param="promete_condicao", op=Operador.TRUTHY),
+            Condition(param="cotacao_emitida", op=Operador.FALSY),
+        ],
+        soul_behavior_id="nao_prometer_sem_lastro",
+        mensagem=(
+            "não prometa desconto/prazo ao cliente sem uma cotação emitida que "
+            "dê lastro à condição"
+        ),
+    ),
+]
+
 
 def construir_policy_exemplo(tools: Mapping[str, ToolDeclaration]) -> RiskPolicy:
     """Monta a RiskPolicy do catálogo: base de cada ToolDeclaration + escaladores seed."""
@@ -69,5 +90,6 @@ def construir_policy_exemplo(tools: Mapping[str, ToolDeclaration]) -> RiskPolicy
                 escaladores=ESCALADORES_SEED.get(nome, []),
             )
             for nome, decl in tools.items()
-        }
+        },
+        invariantes=INVARIANTES_SEED,
     )

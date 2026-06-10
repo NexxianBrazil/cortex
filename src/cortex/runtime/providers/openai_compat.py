@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from openai import OpenAI
 
 from cortex.identity.models import ToolDeclaration
-from cortex.runtime.messages import LLMResponse, Message, Role, ToolCall
+from cortex.runtime.messages import LLMResponse, Message, Role, TokenUsage, ToolCall
 from cortex.runtime.providers.base import LLMProvider
 
 logger = logging.getLogger("cortex.runtime")
@@ -145,4 +145,10 @@ class OpenAICompatProvider(LLMProvider):
             )
             for tc in (escolha.tool_calls or [])
         ]
-        return LLMResponse(texto=escolha.content, tool_calls=tool_calls)
+        uso = None
+        if resposta.usage is not None:
+            uso = TokenUsage(
+                input_tokens=resposta.usage.prompt_tokens,
+                output_tokens=resposta.usage.completion_tokens,
+            )
+        return LLMResponse(texto=escolha.content, tool_calls=tool_calls, uso=uso)

@@ -73,6 +73,13 @@ class CortexConfig(BaseSettings):
         default="observe",
         description="Decision Engine: 'observe' (dry-run, default) ou 'enforce' (barra MEDIUM+)",
     )
+    audit: bool = Field(
+        default=True, description="Liga a trilha de auditoria (Audit Engine, Fase 4c)"
+    )
+    audit_path: Path = Field(
+        default=Path("audit/decisions.jsonl"),
+        description="Arquivo JSONL append-only da trilha de auditoria (Data Plane local)",
+    )
 
     # --- guardrails do loop ---
     max_iteracoes: int = Field(

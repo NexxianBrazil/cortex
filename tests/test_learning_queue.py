@@ -137,3 +137,68 @@ def test_decidir_duas_vezes_falha(engine):
     engine.aprovar(pid, autor=GESTOR, razao="ok")
     with pytest.raises(PropostaJaDecididaError):
         engine.rejeitar(pid, autor=GESTOR, razao="mudei de ideia")
+
+
+# ---------------------------------------------------------------------------
+# Fase 4c — propostas de AÇÃO (enforce → fila) e exceção one-shot
+# ---------------------------------------------------------------------------
+
+
+def test_acao_bloqueada_vira_proposta_e_aprovar_libera_excecao(engine):
+    """Bloqueio em enforce cria Proposal kind=ACAO; aprovar não escreve crença;
+    consumir_excecao marca consumed_at e gera episódio."""
+    import json
+
+    from cortex.memory import ProposalKind, propor_acao
+    from cortex.risk import RiskLevel
+
+    args = {"destinatario": "cliente@gmail.com", "assunto": "x", "corpo": "y"}
+    proposta = propor_acao(
+        tool="enviar_email",
+        argumentos=args,
+        risco=RiskLevel.HIGH,
+        motivos=["destinatário externo"],
+        autor_pedido="Mariana",
+        domain="comercial",
+    )
+    engine.store.add_proposal(proposta)
+    pid = proposta.id
+
+    p = engine.store.proposal_by_id(pid)
+    assert p.kind is ProposalKind.ACAO
+    assert p.key == "acao:enviar_email"
+    assert json.loads(p.proposed_value) == args  # args canônicos
+
+    # Aprovar a AÇÃO: nenhuma crença escrita; episódio com o autor.
+    n_beliefs = len(engine.store.all_beliefs())
+    ep = engine.aprovar(pid, autor=GESTOR, razao="ok, pode enviar")
+    assert len(engine.store.all_beliefs()) == n_beliefs  # sem escrita de crença
+    assert "APROVOU a ação enviar_email" in ep.action
+
+    # Exceção disponível: consumir uma vez marca consumed_at e gera episódio.
+    args_json = json.dumps(args, ensure_ascii=False, sort_keys=True)
+    consumida = engine.consumir_excecao("enviar_email", args_json)
+    assert consumida is not None and consumida.id == pid
+    assert engine.store.proposal_by_id(pid).consumed_at is not None
+    # Segunda vez: já consumida → None.
+    assert engine.consumir_excecao("enviar_email", args_json) is None
+
+
+def test_rejeitar_acao_nao_gera_excecao(engine):
+    from cortex.memory import ProposalStatus, propor_acao
+    from cortex.risk import RiskLevel
+
+    args = {"destinatario": "cliente@gmail.com", "assunto": "x", "corpo": "y"}
+    proposta = propor_acao(
+        "enviar_email", args, RiskLevel.HIGH, ["externo"], "Mariana", "comercial"
+    )
+    engine.store.add_proposal(proposta)
+
+    ep = engine.rejeitar(proposta.id, autor=GESTOR, razao="não autorizo")
+    assert "REJEITOU a ação enviar_email" in ep.action
+    assert engine.store.proposal_by_id(proposta.id).status is ProposalStatus.REJEITADA
+    # Nenhuma exceção disponível para consumir.
+    import json
+
+    aj = json.dumps(args, ensure_ascii=False, sort_keys=True)
+    assert engine.consumir_excecao("enviar_email", aj) is None

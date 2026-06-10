@@ -129,10 +129,44 @@ class ToolRiskPolicy(_PolicyModel):
     escaladores: list[RiskEscalator] = []
 
 
+class Invariante(_PolicyModel):
+    """Um invariante de FORMAÇÃO — o piso inviolável (doutrina §6.1).
+
+    Comportamento de formação não é prompt; é invariante mecânico. Se TODAS as
+    condições casarem com os argumentos, a chamada é PROIBIDA — independente de
+    quem pediu (inclusive o gestor do cliente), em QUALQUER modo (observe e
+    enforce; o piso não tem dry-run) e NÃO é aprovável pela fila do cliente
+    (formação só muda via Nexxian/Git).
+
+    `soul_behavior_id` é a linhagem ao comportamento do SOUL que o motiva — a
+    formação é a fonte, o invariante é a materialização. O wiring valida que
+    esse id existe no SOUL carregado (invariante órfão = erro de config).
+    """
+
+    tool: str
+    condicoes: list[Condition]
+    soul_behavior_id: str
+    mensagem: str
+
+    def aplica(self, argumentos: dict) -> bool:
+        return all(c.aplica(argumentos) for c in self.condicoes)
+
+
 class RiskPolicy(_PolicyModel):
     """Política completa: o mapa tool → ToolRiskPolicy que o engine interpreta."""
 
     tools: dict[str, ToolRiskPolicy]
+    invariantes: list[Invariante] = []
+
+    def violacao(self, tool: str, argumentos: dict) -> Invariante | None:
+        """O primeiro invariante de formação violado por esta chamada, ou None.
+
+        Predicados ausentes nunca disparam — conservador como nos escaladores.
+        """
+        for inv in self.invariantes:
+            if inv.tool == tool and inv.aplica(argumentos):
+                return inv
+        return None
 
     def avaliar_risco(self, tool: str, argumentos: dict) -> tuple[RiskLevel, list[str]]:
         """Risco da chamada concreta + os porquês (base + escaladores que dispararam).

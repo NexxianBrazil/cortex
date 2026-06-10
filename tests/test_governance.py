@@ -12,6 +12,7 @@ from cortex.governance import (
     Condition,
     DecisionEngine,
     DecisionMode,
+    Invariante,
     Operador,
     RiskEscalator,
     RiskPolicy,
@@ -245,3 +246,96 @@ def test_loop_sem_decision_engine_se_comporta_como_fase2(persona):
     msg_tool = [m for m in s.historico if m.role.value == "tool"][0]
     assert msg_tool.erro is False
     assert "enviado" in msg_tool.content
+
+
+# ---------------------------------------------------------------------------
+# Fase 4c — invariantes de formação (SOUL → Decision Engine)
+# ---------------------------------------------------------------------------
+
+
+def _args_promessa(cotacao_emitida: bool) -> dict:
+    return {
+        "destinatario": EMAIL_INTERNO,
+        "assunto": "desconto",
+        "corpo": "fechado 20%",
+        "promete_condicao": True,
+        "cotacao_emitida": cotacao_emitida,
+    }
+
+
+@pytest.mark.parametrize("modo", [DecisionMode.OBSERVE, DecisionMode.ENFORCE])
+def test_invariante_proibe_em_qualquer_modo(policy, modo):
+    """Promessa sem cotação viola nao_prometer_sem_lastro → PROIBIDO nos 2 modos."""
+    engine = DecisionEngine(policy, mode=modo)
+    d = engine.avaliar("enviar_email", _args_promessa(cotacao_emitida=False))
+    assert d.verdict is Verdict.PROIBIDO_FORMACAO
+    assert d.executou is False  # piso inviolável: sem dry-run, mesmo em observe
+    assert d.risco is RiskLevel.CRITICAL
+    assert d.soul_behavior_id == "nao_prometer_sem_lastro"
+
+
+def test_invariante_nao_dispara_com_lastro(policy):
+    """Com cotação emitida (lastro), a promessa é permitida — fluxo normal."""
+    engine = DecisionEngine(policy)  # observe
+    d = engine.avaliar("enviar_email", _args_promessa(cotacao_emitida=True))
+    assert d.verdict is Verdict.PERMITIDO
+    assert d.soul_behavior_id is None
+
+
+def test_montagem_valida_linhagem_invariante_orfao(persona):
+    """Invariante citando comportamento inexistente no SOUL → erro na montagem."""
+    # Injeta um invariante órfão monkeypatchando a policy de exemplo.
+    import cortex.governance.example_policy as ep_mod
+    from cortex.config import CortexConfig
+    from cortex.governance import InvarianteSemLinhagemError
+    from cortex.runtime.app import montar_decision_engine
+
+    orfao = Invariante(
+        tool="enviar_email",
+        condicoes=[Condition(param="x", op=Operador.TRUTHY)],
+        soul_behavior_id="comportamento_que_nao_existe",
+        mensagem="x",
+    )
+    original = ep_mod.INVARIANTES_SEED
+    ep_mod.INVARIANTES_SEED = [*original, orfao]
+    try:
+        with pytest.raises(InvarianteSemLinhagemError, match="comportamento_que_nao_existe"):
+            montar_decision_engine(CortexConfig(), persona)
+    finally:
+        ep_mod.INVARIANTES_SEED = original
+
+
+# ---------------------------------------------------------------------------
+# Fase 4c — exceção one-shot (enforce + aprovação humana)
+# ---------------------------------------------------------------------------
+
+
+def test_excecao_one_shot_consumida_uma_vez(policy):
+    """Exceção aprovada para args idênticos → permite uma vez; depois bloqueia."""
+    import json
+
+    args = _email_args(EMAIL_EXTERNO)  # risco HIGH em enforce
+    args_json = json.dumps(args, ensure_ascii=False, sort_keys=True)
+
+    # Simula uma exceção aprovada disponível só para ESTA chamada.
+    consumidas: list[str] = []
+
+    def buscar(tool: str, aj: str):
+        if tool == "enviar_email" and aj == args_json and not consumidas:
+            consumidas.append(aj)  # one-shot: consome na 1ª vez
+            return type("P", (), {"id": 7})()
+        return None
+
+    engine = DecisionEngine(policy, mode=DecisionMode.ENFORCE, buscar_excecao=buscar)
+
+    d1 = engine.avaliar("enviar_email", args)
+    assert d1.verdict is Verdict.PERMITIDO
+    assert any("exceção aprovada" in m for m in d1.motivos)
+
+    d2 = engine.avaliar("enviar_email", args)  # consumida → bloqueia
+    assert d2.verdict is Verdict.PRECISA_APROVACAO
+
+    # Args diferentes (mesma tool) → nunca casam a exceção.
+    consumidas.clear()
+    d3 = engine.avaliar("enviar_email", _email_args(EMAIL_INTERNO))  # interno = LOW, nem bloqueia
+    assert d3.verdict is Verdict.PERMITIDO and not d3.bloqueavel

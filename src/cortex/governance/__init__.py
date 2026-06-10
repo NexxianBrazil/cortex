@@ -8,10 +8,12 @@ cuja fila real é a 4c). Unificar o ceticismo da memória (4b) e a Learning
 Queue + Audit (4c) vêm depois.
 """
 
+from cortex.governance.audit import AuditTrail
 from cortex.governance.engine import (
     Decision,
     DecisionEngine,
     DecisionMode,
+    InvarianteSemLinhagemError,
     Verdict,
 )
 from cortex.governance.example_policy import (
@@ -19,6 +21,7 @@ from cortex.governance.example_policy import (
 )
 from cortex.governance.policy import (
     Condition,
+    Invariante,
     Operador,
     RiskEscalator,
     RiskPolicy,
@@ -26,10 +29,13 @@ from cortex.governance.policy import (
 )
 
 __all__ = [
+    "AuditTrail",
     "Condition",
     "Decision",
     "DecisionEngine",
     "DecisionMode",
+    "Invariante",
+    "InvarianteSemLinhagemError",
     "Operador",
     "RiskEscalator",
     "RiskPolicy",

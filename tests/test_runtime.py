@@ -210,3 +210,135 @@ def test_system_prompt_cobre_a_formacao_completa(persona):
     assert "Paula Andrade" in system  # relacionamento
     assert "Playbook: emitir_cotacao" in system
     assert "escalar_quando_incerto" in system
+
+
+# ---------------------------------------------------------------------------
+# Fase 4c — loop em enforce: proposta de ação vs proibido por formação
+# ---------------------------------------------------------------------------
+
+
+def _engine_memoria_com_gestor(persona):
+    from cortex.memory import (
+        DictAuthorityMap,
+        DictSourceOfTruth,
+        HeuristicClassifier,
+        InMemoryStore,
+        MemoryEngine,
+    )
+
+    return MemoryEngine(
+        store=InMemoryStore(),
+        classifier=HeuristicClassifier(),
+        authority_map=DictAuthorityMap({"governanca": {"Carlos Menezes"}}),
+        source_of_truth=DictSourceOfTruth({}),
+    )
+
+
+def test_loop_enforce_bloqueio_cria_proposta_e_cita_id(persona, registry):
+    """Tool bloqueada em enforce → mensagem ao LLM contém o id da proposta criada."""
+    from cortex.governance import DecisionEngine, DecisionMode, construir_policy_exemplo
+
+    engine_mem = _engine_memoria_com_gestor(persona)
+    decision = DecisionEngine(
+        construir_policy_exemplo(persona.tools), mode=DecisionMode.ENFORCE
+    )
+    stub = StubProvider(
+        roteiro=[
+            LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="e1",
+                        nome="enviar_email",
+                        argumentos={
+                            "destinatario": "cliente@gmail.com",
+                            "assunto": "x",
+                            "corpo": "y",
+                        },
+                    )
+                ]
+            ),
+            LLMResponse(texto="avisei o usuário"),
+        ]
+    )
+    loop = AgentLoop(stub, registry, memory=engine_mem, decision=decision)
+    loop.executar_turno(Session(persona), "manda e-mail pro cliente")
+
+    # A proposta de ação foi criada na fila...
+    propostas = engine_mem.store.proposals()
+    assert len(propostas) == 1 and propostas[0].key == "acao:enviar_email"
+    # ...e a mensagem ao LLM cita o id dela.
+    pid = propostas[0].id
+    tool_msgs = [c for c in stub.chamadas[-1][1] if c.role is Role.TOOL]
+    assert any(f"#{pid}" in m.content and "aguarda aprovação" in m.content for m in tool_msgs)
+
+
+def test_loop_enforce_invariante_recusa_sem_proposta(persona, registry):
+    """Invariante de formação → mensagem de FORMAÇÃO ao LLM, SEM criar proposta."""
+    from cortex.governance import DecisionEngine, DecisionMode, construir_policy_exemplo
+
+    engine_mem = _engine_memoria_com_gestor(persona)
+    decision = DecisionEngine(
+        construir_policy_exemplo(persona.tools), mode=DecisionMode.ENFORCE
+    )
+    stub = StubProvider(
+        roteiro=[
+            LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="e1",
+                        nome="enviar_email",
+                        argumentos={
+                            "destinatario": "colega@nexxian.com",
+                            "assunto": "desconto",
+                            "corpo": "fechado 20%",
+                            "promete_condicao": True,
+                            "cotacao_emitida": False,
+                        },
+                    )
+                ]
+            ),
+            LLMResponse(texto="recusei educadamente"),
+        ]
+    )
+    loop = AgentLoop(stub, registry, memory=engine_mem, decision=decision)
+    loop.executar_turno(Session(persona), "promete 20% pro cliente por e-mail")
+
+    # Nenhuma proposta foi criada (formação não é aprovável pela fila).
+    assert engine_mem.store.proposals() == []
+    tool_msgs = [c for c in stub.chamadas[-1][1] if c.role is Role.TOOL]
+    assert any("RECUSADA POR FORMAÇÃO" in m.content for m in tool_msgs)
+    assert any("nao_prometer_sem_lastro" in m.content for m in tool_msgs)
+
+
+# ---------------------------------------------------------------------------
+# Fase 4c — AuditTrail
+# ---------------------------------------------------------------------------
+
+
+def test_audit_trail_grava_jsonl_valido(tmp_path):
+    import json
+
+    from cortex.governance import AuditTrail
+
+    at = AuditTrail(tmp_path / "audit" / "d.jsonl")
+    at.registrar("decisao_tool", tool="enviar_email", risco="high", verdict="precisa_aprovacao")
+    at.registrar("llm_request", iteracao=1, input_tokens=10, output_tokens=3)
+    at.registrar("turno", iteracoes=2, tools=["enviar_email"], input_tokens=10, output_tokens=3)
+
+    linhas = (tmp_path / "audit" / "d.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(linhas) == 3
+    objs = [json.loads(ln) for ln in linhas]
+    assert {o["tipo"] for o in objs} == {"decisao_tool", "llm_request", "turno"}
+    assert all("ts" in o for o in objs)  # timestamp em toda linha
+
+
+def test_audit_trail_falha_de_escrita_nao_derruba(tmp_path):
+    from cortex.governance import AuditTrail
+
+    # path impossível (um arquivo no lugar do diretório) → escrita falha.
+    arquivo = tmp_path / "bloqueio"
+    arquivo.write_text("x")
+    at = AuditTrail(arquivo / "sub" / "d.jsonl")
+    # Não deve levantar — só loga warning.
+    at.registrar("decisao_tool", tool="x")
+    assert at.ultimos(5) == []

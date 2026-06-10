@@ -14,12 +14,13 @@ import json
 import logging
 from collections.abc import Sequence
 
-from cortex.governance.engine import DecisionEngine
+from cortex.governance.engine import DecisionEngine, Verdict
 from cortex.identity.models import Persona
 from cortex.memory.engine import MemoryEngine
+from cortex.memory.learning import propor_acao
 from cortex.memory.semantic import Belief
 from cortex.runtime.messages import Message, Role
-from cortex.runtime.promotion import promover
+from cortex.runtime.promotion import DOMINIO_PADRAO, promover
 from cortex.runtime.providers.base import LLMProvider
 from cortex.runtime.recall import formatar_beliefs, recuperar_beliefs
 from cortex.runtime.session import Session
@@ -98,6 +99,7 @@ class AgentLoop:
         memory: MemoryEngine | None = None,
         recall_limite: int = 5,
         decision: DecisionEngine | None = None,
+        audit=None,
     ) -> None:
         if max_iteracoes < 1:
             raise ValueError("max_iteracoes deve ser >= 1")
@@ -112,6 +114,9 @@ class AgentLoop:
         # cada chamada de tool passa pelo crivo de risco antes de executar
         # (observe: só loga; enforce: barra MEDIUM+). Ver Fase 4a.
         self._decision = decision
+        # audit=None: sem trilha durável (só os logs). Com AuditTrail, registra
+        # custo por request de LLM e um resumo por turno (Fase 4c).
+        self._audit = audit
 
     def executar_turno(self, session: Session, entrada_usuario: str) -> str:
         """Roda um turno completo e devolve a resposta final em texto.
@@ -133,8 +138,23 @@ class AgentLoop:
         system = montar_system_prompt(session.persona, beliefs)
         tools = list(session.persona.tools.values())
 
+        # Acumuladores do resumo de turno para o audit (Bloco 3).
+        tokens_in = tokens_out = 0
+        tools_chamadas: list[str] = []
+        houve_bloqueio = False
+
         for iteracao in range(1, self._max_iteracoes + 1):
             resposta = self._provider.gerar(system, session.historico, tools)
+
+            if resposta.uso is not None:
+                tokens_in += resposta.uso.input_tokens
+                tokens_out += resposta.uso.output_tokens
+                self._audit_registrar(
+                    "llm_request",
+                    iteracao=iteracao,
+                    input_tokens=resposta.uso.input_tokens,
+                    output_tokens=resposta.uso.output_tokens,
+                )
 
             if not resposta.pediu_tool:
                 texto = resposta.texto or ""
@@ -144,6 +164,14 @@ class AgentLoop:
                     # Promoção no FIM do turno (decisão 1): só candidatos claros,
                     # pelo crivo do observe(). Ver runtime/promotion.py.
                     promover(self._memory, session.historico[inicio_turno:])
+                self._audit_registrar(
+                    "turno",
+                    iteracoes=iteracao,
+                    tools=tools_chamadas,
+                    input_tokens=tokens_in,
+                    output_tokens=tokens_out,
+                    houve_bloqueio=houve_bloqueio,
+                )
                 return texto
 
             # O LLM pediu tools: registra o pedido e executa cada uma.
@@ -158,6 +186,7 @@ class AgentLoop:
                 logger.info(
                     "iteração %d: tool=%s args=%s", iteracao, pedido.nome, pedido.argumentos
                 )
+                tools_chamadas.append(pedido.nome)
 
                 # Crivo de risco (Fase 4a): avalia ANTES de executar. Em
                 # observe, decisao.executou é sempre True (só loga). Em
@@ -166,17 +195,8 @@ class AgentLoop:
                 if self._decision is not None:
                     decisao = self._decision.avaliar(pedido.nome, pedido.argumentos)
                     if not decisao.executou:
-                        conteudo = (
-                            f"AÇÃO BLOQUEADA pela governança — precisa de aprovação "
-                            f"(risco {decisao.risco.value}): {'; '.join(decisao.motivos)}. "
-                            "A fila de aprovação será tratada na Fase 4c."
-                        )
-                        logger.warning(
-                            "iteração %d: tool=%s BLOQUEADA (enforce, risco=%s)",
-                            iteracao,
-                            pedido.nome,
-                            decisao.risco.value,
-                        )
+                        houve_bloqueio = True
+                        conteudo = self._mensagem_bloqueio(decisao, pedido, session)
                         session.historico.append(
                             Message(
                                 role=Role.TOOL,
@@ -217,4 +237,62 @@ class AgentLoop:
         raise LoopLimiteExcedidoError(
             f"turno excedeu o teto de {self._max_iteracoes} iterações sem resposta "
             "final em texto — encerrado por guardrail de custo/segurança"
+        )
+
+    def _audit_registrar(self, tipo: str, **campos) -> None:
+        """Registra no audit, se houver — falha de escrita nunca derruba o turno."""
+        if self._audit is not None:
+            self._audit.registrar(tipo, **campos)
+
+    def _mensagem_bloqueio(self, decisao, pedido, session: Session) -> str:
+        """Monta o resultado tratável devolvido ao LLM quando a tool não executa.
+
+        Dois casos bem distintos:
+          - PROIBIDO_FORMACAO: viola um comportamento de FORMAÇÃO. NÃO é
+            aprovável pela fila do cliente; a persona deve recusar educadamente
+            explicando o porquê. Nenhuma proposta é criada.
+          - PRECISA_APROVACAO (enforce): vira PROPOSTA DE AÇÃO na fila (se há
+            memória). A aprovação humana concede exceção one-shot (Fase 4c).
+        """
+        if decisao.verdict is Verdict.PROIBIDO_FORMACAO:
+            logger.warning(
+                "tool=%s PROIBIDA POR FORMAÇÃO (comportamento=%s)",
+                pedido.nome,
+                decisao.soul_behavior_id,
+            )
+            return (
+                "AÇÃO RECUSADA POR FORMAÇÃO — esta chamada viola um comportamento "
+                f"inegociável da sua formação [{decisao.soul_behavior_id}]: "
+                f"{'; '.join(decisao.motivos)}. Isto NÃO é aprovável pela fila de "
+                "aprovação (formação só muda via Nexxian). Recuse educadamente ao "
+                "usuário, explicando o porquê com base no seu caráter."
+            )
+
+        # PRECISA_APROVACAO: cria a proposta de ação na fila (se há memória).
+        if self._memory is not None:
+            proposta = propor_acao(
+                tool=pedido.nome,
+                argumentos=pedido.argumentos,
+                risco=decisao.risco,
+                motivos=decisao.motivos,
+                autor_pedido=session.persona.soul.nome,
+                domain=DOMINIO_PADRAO,
+            )
+            self._memory.store.add_proposal(proposta)
+            logger.warning(
+                "tool=%s BLOQUEADA (enforce) — proposta de ação #%d criada",
+                pedido.nome,
+                proposta.id,
+            )
+            return (
+                f"AÇÃO BLOQUEADA pela governança (risco {decisao.risco.value}): "
+                f"{'; '.join(decisao.motivos)}. Proposta #{proposta.id} criada na "
+                "fila de aprovação — informe o usuário que a ação aguarda aprovação "
+                "humana."
+            )
+
+        logger.warning("tool=%s BLOQUEADA (enforce, sem memória)", pedido.nome)
+        return (
+            f"AÇÃO BLOQUEADA pela governança — precisa de aprovação "
+            f"(risco {decisao.risco.value}): {'; '.join(decisao.motivos)}."
         )

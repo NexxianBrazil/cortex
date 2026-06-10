@@ -14,7 +14,7 @@ from collections.abc import Sequence
 import anthropic
 
 from cortex.identity.models import ToolDeclaration
-from cortex.runtime.messages import LLMResponse, Message, Role, ToolCall
+from cortex.runtime.messages import LLMResponse, Message, Role, TokenUsage, ToolCall
 from cortex.runtime.providers.base import LLMProvider
 
 MODELO_PADRAO = "claude-opus-4-8"
@@ -121,4 +121,10 @@ class ClaudeProvider(LLMProvider):
             if b.type == "tool_use"
         ]
         texto = "\n".join(textos) if textos else None
-        return LLMResponse(texto=texto, tool_calls=tool_calls)
+        uso = None
+        if resposta.usage is not None:
+            uso = TokenUsage(
+                input_tokens=resposta.usage.input_tokens,
+                output_tokens=resposta.usage.output_tokens,
+            )
+        return LLMResponse(texto=texto, tool_calls=tool_calls, uso=uso)

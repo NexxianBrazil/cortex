@@ -18,7 +18,9 @@ Engine da 4c. Nada de decisão silenciosa.
 """
 
 import logging
+from collections.abc import Callable
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -30,6 +32,14 @@ logger = logging.getLogger("cortex.governance")
 # Limiar de bloqueio em enforce: MEDIUM ou acima precisa de aprovação.
 # É dado de política (poderia vir da config); mantido num ponto único.
 LIMIAR_BLOQUEIO = RiskLevel.MEDIUM
+
+
+class InvarianteSemLinhagemError(Exception):
+    """Um invariante cita um soul_behavior_id que não existe no SOUL carregado.
+
+    A formação é a FONTE; a policy é a materialização. Invariante órfão é erro
+    de configuração — falha alto na montagem, não em runtime.
+    """
 
 
 class DecisionMode(StrEnum):
@@ -44,6 +54,7 @@ class Verdict(StrEnum):
 
     PERMITIDO = "permitido"
     PRECISA_APROVACAO = "precisa_aprovacao"
+    PROIBIDO_FORMACAO = "proibido_formacao"  # viola invariante do SOUL — piso inviolável
 
 
 class Decision(BaseModel):
@@ -59,15 +70,27 @@ class Decision(BaseModel):
     verdict: Verdict
     executou: bool  # a ação vai/foi executada?
     bloqueavel: bool  # risco >= limiar (em enforce seria barrada)
+    soul_behavior_id: str | None = None  # linhagem ao SOUL quando PROIBIDO_FORMACAO
 
 
 class DecisionEngine:
     """Avalia o risco de cada chamada de tool e decide conforme o modo."""
 
-    def __init__(self, policy: RiskPolicy, mode: DecisionMode = DecisionMode.OBSERVE) -> None:
+    def __init__(
+        self,
+        policy: RiskPolicy,
+        mode: DecisionMode = DecisionMode.OBSERVE,
+        buscar_excecao: Callable[[str, str], Any | None] | None = None,
+        audit: Any | None = None,
+    ) -> None:
         self._policy = policy
         self._mode = mode
-        # Trilha de auditoria em memória — toda decisão fica aqui (semente 4c).
+        # Callable injetado pelo runtime (memory.consumir_excecao) — a
+        # governança NÃO importa a memória; recebe só a função (Bloco 2).
+        self._buscar_excecao = buscar_excecao
+        # AuditTrail injetado pelo runtime (Bloco 3); None = só log em memória.
+        self._audit = audit
+        # Trilha de auditoria em memória — toda decisão fica aqui.
         self.decisoes: list[Decision] = []
 
     @property
@@ -76,6 +99,25 @@ class DecisionEngine:
 
     def avaliar(self, tool: str, argumentos: dict) -> Decision:
         """Avalia uma chamada e devolve o Decision, já registrado e logado."""
+        # PISO INVIOLÁVEL (doutrina §6.1): invariante de formação é checado
+        # ANTES de qualquer lógica de modo. Viola → PROIBIDO em QUALQUER modo
+        # (sem dry-run), executou=False, não-aprovável pela fila do cliente.
+        inv = self._policy.violacao(tool, argumentos)
+        if inv is not None:
+            decisao = Decision(
+                tool=tool,
+                argumentos=argumentos,
+                risco=RiskLevel.CRITICAL,
+                motivos=[f"invariante de formação [{inv.soul_behavior_id}]: {inv.mensagem}"],
+                modo=self._mode,
+                verdict=Verdict.PROIBIDO_FORMACAO,
+                executou=False,
+                bloqueavel=True,
+                soul_behavior_id=inv.soul_behavior_id,
+            )
+            self._finalizar(decisao)
+            return decisao
+
         risco, motivos = self._policy.avaliar_risco(tool, argumentos)
         bloqueavel = risco.ordem >= LIMIAR_BLOQUEIO.ordem
 
@@ -83,14 +125,21 @@ class DecisionEngine:
             # Dry-run: nunca barra; só observa (e diz o que faria em enforce).
             verdict = Verdict.PERMITIDO
             executou = True
+        elif not bloqueavel:
+            verdict = Verdict.PERMITIDO
+            executou = True
         else:
-            # Enforce: risco MEDIUM+ não executa, vira pedido de aprovação.
-            if bloqueavel:
-                verdict = Verdict.PRECISA_APROVACAO
-                executou = False
-            else:
+            # Enforce + bloqueável: antes de barrar, há exceção aprovada para
+            # EXATAMENTE esta chamada? A aprovação humana concede uma exceção
+            # one-shot que consumimos aqui (match exato tool+args canônicos).
+            excecao = self._consumir_excecao(tool, argumentos)
+            if excecao is not None:
                 verdict = Verdict.PERMITIDO
                 executou = True
+                motivos = [*motivos, f"exceção aprovada por humano (proposta {excecao.id})"]
+            else:
+                verdict = Verdict.PRECISA_APROVACAO
+                executou = False
 
         decisao = Decision(
             tool=tool,
@@ -102,13 +151,53 @@ class DecisionEngine:
             executou=executou,
             bloqueavel=bloqueavel,
         )
-        self.decisoes.append(decisao)
-        self._registrar(decisao)
+        self._finalizar(decisao)
         return decisao
+
+    def _consumir_excecao(self, tool: str, argumentos: dict):
+        """Procura/consome a exceção one-shot via o callable injetado (ou None).
+
+        O DecisionEngine NÃO importa a memória — recebe a função
+        (memory.consumir_excecao). Serializa os args canonicamente (mesmo
+        json.dumps sort_keys da proposta) para o match exato.
+        """
+        if self._buscar_excecao is None:
+            return None
+        import json
+
+        argumentos_json = json.dumps(argumentos, ensure_ascii=False, sort_keys=True)
+        return self._buscar_excecao(tool, argumentos_json)
+
+    def _finalizar(self, decisao: Decision) -> None:
+        """Registra a decisão na trilha em memória, no audit (se houver) e loga."""
+        self.decisoes.append(decisao)
+        if self._audit is not None:
+            self._audit.registrar(
+                "decisao_tool",
+                tool=decisao.tool,
+                risco=decisao.risco.value,
+                modo=decisao.modo.value,
+                verdict=decisao.verdict.value,
+                executou=decisao.executou,
+                bloqueavel=decisao.bloqueavel,
+                soul_behavior_id=decisao.soul_behavior_id,
+                motivos=decisao.motivos,
+                argumentos=decisao.argumentos,
+            )
+        self._registrar(decisao)
 
     @staticmethod
     def _registrar(d: Decision) -> None:
         """Log estruturado do veredito (semente do Audit Engine da 4c)."""
+        if d.verdict is Verdict.PROIBIDO_FORMACAO:
+            logger.warning(
+                "decisão PROIBIDA POR FORMAÇÃO tool=%s comportamento=%s motivos=%s args=%s",
+                d.tool,
+                d.soul_behavior_id,
+                "; ".join(d.motivos),
+                d.argumentos,
+            )
+            return
         marca = "EXECUTA" if d.executou else "BLOQUEIA"
         if d.modo is DecisionMode.OBSERVE and d.bloqueavel:
             marca = "EXECUTA (seria BLOQUEADA em enforce)"

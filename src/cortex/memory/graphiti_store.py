@@ -57,7 +57,12 @@ from cortex.memory.entity import (
     ids_entidade,
 )
 from cortex.memory.episodic import Episode, ids_episodio
-from cortex.memory.learning import Proposal, ProposalStatus, ids_proposta
+from cortex.memory.learning import (
+    Proposal,
+    ProposalKind,
+    ProposalStatus,
+    ids_proposta,
+)
 from cortex.memory.models import (
     Justification,
     Procedencia,
@@ -120,8 +125,9 @@ _SCHEMA = [
         source_name STRING, source_kind STRING, source_procedencia STRING,
         why STRING, evidence STRING, verifiable BOOLEAN, proof_pointer STRING,
         domain STRING, risk STRING, reason STRING, origin_episode_id INT64,
-        created_at STRING, status STRING,
+        kind STRING, created_at STRING, status STRING,
         decided_at STRING, decided_by STRING, decision_reason STRING,
+        consumed_at STRING,
         PRIMARY KEY(id))""",
     "CREATE REL TABLE IF NOT EXISTS CX_SUPERSEDES"
     "(FROM CortexBelief TO CortexBelief, reason STRING)",
@@ -172,9 +178,15 @@ class GraphitiStore(MemoryStore):
         pelo _SCHEMA acima), o ADD falha e é ignorado. É migração MÍNIMA de fase
         dev — o versionamento formal de schema é item aberto do projeto.
         """
-        for tabela in ("CortexBelief", "CortexEpisode"):
+        migracoes = [
+            ("CortexBelief", "source_procedencia STRING"),
+            ("CortexEpisode", "source_procedencia STRING"),
+            ("CortexProposal", "kind STRING"),
+            ("CortexProposal", "consumed_at STRING"),
+        ]
+        for tabela, coluna in migracoes:
             try:
-                await self._q(f"ALTER TABLE {tabela} ADD source_procedencia STRING")
+                await self._q(f"ALTER TABLE {tabela} ADD {coluna}")
             except Exception:  # noqa: BLE001 — coluna já existe / nada a migrar
                 pass
 
@@ -544,8 +556,9 @@ _CREATE_PROPOSAL = """CREATE (p:CortexProposal {
     source_name:$source_name, source_kind:$source_kind, source_procedencia:$source_procedencia,
     why:$why, evidence:$evidence, verifiable:$verifiable, proof_pointer:$proof_pointer,
     domain:$domain, risk:$risk, reason:$reason, origin_episode_id:$origin_episode_id,
-    created_at:$created_at, status:$status,
-    decided_at:$decided_at, decided_by:$decided_by, decision_reason:$decision_reason})"""
+    kind:$kind, created_at:$created_at, status:$status,
+    decided_at:$decided_at, decided_by:$decided_by, decision_reason:$decision_reason,
+    consumed_at:$consumed_at})"""
 
 _SELECT_PROPOSALS = """MATCH (p:CortexProposal) RETURN
     p.id AS id, p.key AS key, p.current_value AS current_value,
@@ -555,9 +568,9 @@ _SELECT_PROPOSALS = """MATCH (p:CortexProposal) RETURN
     p.why AS why, p.evidence AS evidence, p.verifiable AS verifiable,
     p.proof_pointer AS proof_pointer, p.domain AS domain, p.risk AS risk,
     p.reason AS reason, p.origin_episode_id AS origin_episode_id,
-    p.created_at AS created_at, p.status AS status,
+    p.kind AS kind, p.created_at AS created_at, p.status AS status,
     p.decided_at AS decided_at, p.decided_by AS decided_by,
-    p.decision_reason AS decision_reason
+    p.decision_reason AS decision_reason, p.consumed_at AS consumed_at
     ORDER BY p.id"""
 
 
@@ -578,11 +591,13 @@ def _proposal_params(p: Proposal) -> dict[str, Any]:
         "risk": p.risk.value,
         "reason": p.reason,
         "origin_episode_id": p.origin_episode_id,
+        "kind": p.kind.value,
         "created_at": _iso(p.created_at),
         "status": p.status.value,
         "decided_at": _iso(p.decided_at),
         "decided_by": p.decided_by,
         "decision_reason": p.decision_reason,
+        "consumed_at": _iso(p.consumed_at),
     }
 
 
@@ -603,9 +618,11 @@ def _proposal_de_row(r: dict) -> Proposal:
         risk=RiskLevel(r["risk"]),
         reason=r["reason"],
         origin_episode_id=r["origin_episode_id"],
+        kind=ProposalKind(r["kind"]) if r.get("kind") else ProposalKind.MEMORIA,
         created_at=_dt(r["created_at"]),
         status=ProposalStatus(r["status"]),
         decided_at=_dt(r["decided_at"]),
         decided_by=r["decided_by"],
         decision_reason=r["decision_reason"],
+        consumed_at=_dt(r.get("consumed_at")),
     )

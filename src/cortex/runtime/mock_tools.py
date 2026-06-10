@@ -56,8 +56,14 @@ def _enviar_email(
     assunto: str,
     corpo: str,
     anexos: list | None = None,
+    promete_condicao: bool = False,
+    cotacao_emitida: bool = False,
 ) -> dict:
-    """Finge enviar o e-mail; nenhuma mensagem sai de verdade."""
+    """Finge enviar o e-mail; nenhuma mensagem sai de verdade.
+
+    `promete_condicao`/`cotacao_emitida` existem para a política de governança
+    (invariante nao_prometer_sem_lastro) — não alteram o envio fake.
+    """
     return {
         "status": "enviado",
         "destinatario": destinatario,

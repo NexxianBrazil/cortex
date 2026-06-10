@@ -36,7 +36,12 @@ from cortex.memory.factory import (
     criar_classifier,
     criar_store,
 )
-from cortex.memory.learning import Proposal, ProposalStatus
+from cortex.memory.learning import (
+    Proposal,
+    ProposalKind,
+    ProposalStatus,
+    propor_acao,
+)
 from cortex.memory.models import (
     Justification,
     Procedencia,
@@ -78,6 +83,7 @@ __all__ = [
     "MemoryStore",
     "Procedencia",
     "Proposal",
+    "ProposalKind",
     "ProposalStatus",
     "PropostaJaDecididaError",
     "Relationship",
@@ -89,4 +95,5 @@ __all__ = [
     "agora",
     "criar_classifier",
     "criar_store",
+    "propor_acao",
 ]
