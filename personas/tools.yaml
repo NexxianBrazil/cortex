@@ -8,6 +8,24 @@
 # será consumido pela Decision Engine na Fase 4.
 # =========================================================================
 tools:
+  - nome: consultar_kb
+    descricao: >-
+      Consulta a Knowledge Base — a VERDADE DECLARADA da empresa (políticas,
+      regras, prazos, condições). Consulte SEMPRE que a pergunta envolver
+      política, regra, prazo ou condição da empresa: a KB prevalece sobre o que
+      você lembra (KB > memória). Devolve trechos com fonte, autoridade e
+      vigência; só traz o que está vigente. Se nada for relevante, diz isso
+      explicitamente — não invente política.
+    risco_base: low
+    parametros:
+      - nome: pergunta
+        tipo: string
+        descricao: 'A pergunta em linguagem natural (ex.: "qual o desconto máximo?")'
+      - nome: dominio
+        tipo: string
+        descricao: Domínio para filtrar (ex.- "comercial"); opcional
+        obrigatorio: false
+
   - nome: consultar_preco
     descricao: >-
       Consulta o preço de tabela e a disponibilidade de um produto no

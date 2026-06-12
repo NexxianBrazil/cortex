@@ -34,6 +34,10 @@ htmlcov/
 # Trilha de auditoria local (Audit Engine — Fase 4c, Data Plane on-prem)
 audit/
 
+# Índice da Knowledge Base (gerado pelo `cortex kb indexar`; embeddings — Fase 5a)
+.kb_index.json
+**/.kb_index.json
+
 # IDEs / editores
 .idea/
 .vscode/

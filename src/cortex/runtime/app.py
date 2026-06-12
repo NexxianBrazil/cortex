@@ -21,6 +21,9 @@ from cortex.governance.engine import (
 )
 from cortex.governance.example_policy import construir_policy_exemplo
 from cortex.identity.models import Persona
+from cortex.knowledge.factory import criar_embedder
+from cortex.knowledge.index import KnowledgeBase
+from cortex.knowledge.tool import ConsultarKBTool
 from cortex.memory.engine import MemoryEngine
 from cortex.memory.factory import criar_classifier, criar_store
 from cortex.memory.seams import AuthorityMap, DictAuthorityMap, DictSourceOfTruth
@@ -110,6 +113,26 @@ def montar_decision_engine(
     )
 
 
+def registrar_kb(registry, config: CortexConfig, persona: Persona) -> None:
+    """Registra a tool REAL `consultar_kb` quando a persona a declara.
+
+    Aqui mora a fronteira entre os dois planos da memória: a KB é o Plano 2 (a
+    verdade DECLARADA da empresa) e é consultada via RAG — método de ACESSO, não
+    de memória. Por isso `consultar_kb` fica de fora dos extratores de promoção
+    (ver promotion.py): consultar não memoriza. O embedder é SEAM por config
+    (stub no CI; OpenAI-compat/Ollama on-prem — soberania sem trocar código).
+
+    Não indexa aqui (indexar é ato deliberado do curador, `cortex kb indexar`):
+    se a KB não estiver indexada, a própria tool degrada para um aviso e a
+    persona segue operando — um deploy sem KB curada não pode travar.
+    """
+    if "consultar_kb" not in persona.tools:
+        return
+    embedder = criar_embedder(config)
+    kb = KnowledgeBase(config.kb_path, embedder)
+    registry.registrar("consultar_kb", ConsultarKBTool(kb))
+
+
 def montar_runtime(
     config: CortexConfig, persona: Persona
 ) -> tuple[AgentLoop, MemoryEngine]:
@@ -126,6 +149,7 @@ def montar_runtime(
         config, persona, buscar_excecao=engine.consumir_excecao, audit=audit
     )
     registry = criar_registry_mock(persona.tools)
+    registrar_kb(registry, config, persona)
     loop = AgentLoop(
         provider,
         registry,

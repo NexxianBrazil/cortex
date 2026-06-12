@@ -81,6 +81,20 @@ class CortexConfig(BaseSettings):
         description="Arquivo JSONL append-only da trilha de auditoria (Data Plane local)",
     )
 
+    # --- knowledge base / RAG (Fase 5a) ---
+    kb_path: Path = Field(
+        default=Path("kb"),
+        description="Diretório da Knowledge Base (.md com frontmatter curado)",
+    )
+    embedding_provider: Literal["stub", "openai_compat"] = Field(
+        default="stub",
+        description="Embedder: 'stub' (CI, feature hashing) ou 'openai_compat' (OpenAI/Ollama)",
+    )
+    embedding_model: str | None = Field(
+        default=None,
+        description="Modelo de embedding (ex.: nomic-embed-text no Ollama); None usa o padrão",
+    )
+
     # --- guardrails do loop ---
     max_iteracoes: int = Field(
         default=10, ge=1, description="Teto de voltas do loop por turno (guardrail de custo)"

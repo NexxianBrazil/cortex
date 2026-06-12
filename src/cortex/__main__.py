@@ -12,6 +12,7 @@ import sys
 from cortex.config import CortexConfig
 from cortex.governance import AuditTrail
 from cortex.identity import carregar_persona
+from cortex.knowledge import KBIndexError, KnowledgeBase, criar_embedder
 from cortex.memory import (
     AutoridadeInsuficienteError,
     Procedencia,
@@ -132,6 +133,42 @@ def _fila_decidir(config: CortexConfig, acao: str, pid: int, autor: str, razao: 
     return 0
 
 
+def _kb_indexar(config: CortexConfig) -> int:
+    """(Re)indexa a KB inteira — ato DELIBERADO do curador (embedding pode ser remoto)."""
+    kb = KnowledgeBase(config.kb_path, criar_embedder(config))
+    resumo = kb.indexar()
+    print(
+        f"KB indexada em {config.kb_path}: {resumo['documentos']} documento(s), "
+        f"{resumo['chunks']} chunk(s)."
+    )
+    return 0
+
+
+def _kb_buscar(
+    config: CortexConfig, pergunta: str, dominio: str | None, revogados: bool
+) -> int:
+    """Consulta a KB pela linha de comando — debug do curador, mesma busca da tool.
+
+    `--revogados` traz também o histórico revogado, sempre MARCADO: o curador
+    inspeciona a linhagem bi-temporal sem que um documento antigo se passe por
+    vigente (a tool consultar_kb, em produção, nunca traz revogados).
+    """
+    kb = KnowledgeBase(config.kb_path, criar_embedder(config))
+    try:
+        resultados = kb.buscar(pergunta, dominio=dominio, incluir_revogados=revogados)
+    except KBIndexError as exc:
+        print(f"[cortex] {exc}")
+        return 1
+    if not resultados:
+        print("Nada relevante na KB para essa pergunta.")
+        return 0
+    for r in resultados:
+        marca = "  ⚠ REVOGADO" if r.revogado else ""
+        print(f"[{r.score}] {r.arquivo} — {r.titulo} ({r.autoridade}){marca}")
+        print(f"    {r.texto[:200].strip()}")
+    return 0
+
+
 def _audit_listar(config: CortexConfig, n: int) -> int:
     """Imprime as últimas N linhas da trilha de auditoria de forma legível."""
     linhas = AuditTrail(config.audit_path).ultimos(n)
@@ -178,6 +215,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         sp.add_argument("--razao", required=True, help="motivo da decisão (vira memória)")
 
+    kb = subparsers.add_parser("kb", help="Knowledge Base: (re)indexa e consulta a KB curada")
+    kb_sub = kb.add_subparsers(dest="acao", required=True)
+    kb_sub.add_parser("indexar", help="(re)indexa a KB inteira — ato deliberado do curador")
+    kb_buscar = kb_sub.add_parser("buscar", help="consulta a KB (debug do curador)")
+    kb_buscar.add_argument("pergunta", help="pergunta em linguagem natural")
+    kb_buscar.add_argument("--dominio", default=None, help="filtra por domínio (ex.: comercial)")
+    kb_buscar.add_argument(
+        "--revogados",
+        action="store_true",
+        help="inclui documentos revogados no histórico (sempre marcados ⚠)",
+    )
+
     audit_p = subparsers.add_parser("audit", help="inspeciona a trilha de auditoria")
     audit_p.add_argument(
         "--ultimos", type=int, default=20, help="quantas linhas mostrar (default 20)"
@@ -197,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.acao in ("aprovar", "rejeitar"):
             return _fila_decidir(config, args.acao, args.id, args.autor, args.razao)
         return _fila_listar(config)
+    if args.comando == "kb":
+        if args.acao == "indexar":
+            return _kb_indexar(config)
+        return _kb_buscar(config, args.pergunta, args.dominio, args.revogados)
     if args.comando == "audit":
         return _audit_listar(config, args.ultimos)
     return 1
