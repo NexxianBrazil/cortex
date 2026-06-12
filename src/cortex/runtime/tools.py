@@ -43,6 +43,10 @@ class ToolRegistry:
         self._declaracoes = dict(declaracoes)
         self._implementacoes: dict[str, ToolFunc] = {}
 
+    def declarada(self, nome: str) -> bool:
+        """True se `nome` consta do catálogo da persona (pode receber implementação)."""
+        return nome in self._declaracoes
+
     def registrar(self, nome: str, func: ToolFunc) -> None:
         """Associa uma implementação a uma tool declarada no catálogo."""
         if nome not in self._declaracoes:

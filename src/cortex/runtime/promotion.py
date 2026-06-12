@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict
 
 from cortex.memory.engine import MemoryEngine
 from cortex.memory.episodic import Episode
-from cortex.memory.models import Justification, Source, SourceKind
+from cortex.memory.models import Justification, Source
 from cortex.runtime.messages import Message, Role
 
 logger = logging.getLogger("cortex.runtime")
@@ -55,37 +55,16 @@ class PromotionCandidate(BaseModel):
 ExtratorTool = Callable[[dict], list[PromotionCandidate]]
 
 
-def _extrair_consultar_preco(resultado: dict) -> list[PromotionCandidate]:
-    """Preço de tabela retornado pela tool consultar_preco vira um belief.
-
-    Fonte = a tool (verificável): preço é exatamente o tipo de fato com
-    chave/valor claros que queremos lembrar. Note que fica `verifiable=True`,
-    então numa futura divergência o motor vai reconferir (valor que apodrece).
-    """
-    codigo = resultado.get("codigo_produto")
-    preco = resultado.get("preco_unitario")
-    if not codigo or preco is None:
-        return []
-    moeda = resultado.get("moeda", "")
-    return [
-        PromotionCandidate(
-            key=f"produto:{codigo}:preco",
-            value=f"{moeda} {preco}".strip(),
-            source=Source(name="consultar_preco", kind=SourceKind.TOOL),
-            justification=Justification(
-                why="preço de tabela consultado",
-                verifiable=True,
-                proof_pointer="tool:consultar_preco",
-            ),
-        )
-    ]
-
-
 # Registry de extratores. Tools sem extrator simplesmente não promovem nada —
 # conservador por construção. Cresce aqui conforme novas tools mereçam memória.
-EXTRATORES_POR_TOOL: dict[str, ExtratorTool] = {
-    "consultar_preco": _extrair_consultar_preco,
-}
+#
+# CORREÇÃO DOUTRINÁRIA (Fase 5b): `consultar_preco` foi REMOVIDO daqui. A Fase
+# 3c o usou como demo de promoção ("a Mariana lembra o preço entre sessões"),
+# mas isso CONTRADIZ o Plano 4 — preço é dado VIVO do system of record e nunca
+# vira crença: uma cópia apodrece quando o valor muda na fonte. O que persiste
+# de uma consulta ao SOR é o RASTRO dela (evento `consulta_sor` no audit), não o
+# valor congelado. Tools `system_of_record` ficam, por princípio, fora daqui.
+EXTRATORES_POR_TOOL: dict[str, ExtratorTool] = {}
 
 
 def extrair_candidatos(mensagens_do_turno: Sequence[Message]) -> list[PromotionCandidate]:

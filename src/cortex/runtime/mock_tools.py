@@ -2,34 +2,19 @@
 
 Nada aqui integra sistema real — são dados de brinquedo, determinísticos e
 plausíveis, suficientes para o loop fechar o circuito pedido→execução→
-resultado. As integrações reais (SAP/SQL, e-mail) chegam na Fase 5 e vão
-substituir estas funções no registry sem tocar no loop.
+resultado.
+
+Fase 5b: `consultar_preco` saiu daqui — virou tool VIVA sobre o SOR Gateway
+(ver cortex/sor/tools.py), e os preços fake migraram para o MockSORGateway
+(fonte única de dado de brinquedo). Restam aqui `emitir_cotacao` e
+`enviar_email`, mockadas até uma fase futura (escrita real envolve o Decision
+Engine em outro nível).
 """
 
 from collections.abc import Mapping
 
 from cortex.identity.models import ToolDeclaration
 from cortex.runtime.tools import ToolRegistry
-
-# Tabela de preços de brinquedo — determinística por design (sem random).
-_PRECOS_FAKE: dict[str, float] = {
-    "PRD-001": 1250.00,
-    "PRD-002": 380.50,
-    "PRD-003": 47.90,
-}
-_PRECO_PADRAO = 99.90
-
-
-def _consultar_preco(codigo_produto: str, quantidade: int | None = None) -> dict:
-    """Devolve preço de tabela fake; sempre disponível, sempre o mesmo valor."""
-    preco = _PRECOS_FAKE.get(codigo_produto, _PRECO_PADRAO)
-    return {
-        "codigo_produto": codigo_produto,
-        "preco_unitario": preco,
-        "moeda": "BRL",
-        "disponivel": True,
-        "quantidade_consultada": quantidade,
-    }
 
 
 def _emitir_cotacao(
@@ -74,7 +59,6 @@ def _enviar_email(
 
 
 _IMPLEMENTACOES = {
-    "consultar_preco": _consultar_preco,
     "emitir_cotacao": _emitir_cotacao,
     "enviar_email": _enviar_email,
 }

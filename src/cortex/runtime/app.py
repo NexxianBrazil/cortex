@@ -8,9 +8,17 @@ conectado à memória.
 
 Mantém o acoplamento na direção certa: o runtime conhece a memória; a memória
 não conhece o runtime (o LLMProvider para o LLMClassifier é injetado aqui).
+
+Fase 5b: os símbolos de `cortex.sor` são importados DENTRO das funções de
+montagem. `cortex.sor.tools` depende de `cortex.runtime.tools` (ToolError/
+ToolRegistry) — importar sor no topo aqui fecharia um ciclo runtime↔sor. O
+import tardio mantém o sor como camada inferior, importada só na montagem.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from cortex.config import CortexConfig
 from cortex.governance.audit import AuditTrail
@@ -26,11 +34,14 @@ from cortex.knowledge.index import KnowledgeBase
 from cortex.knowledge.tool import ConsultarKBTool
 from cortex.memory.engine import MemoryEngine
 from cortex.memory.factory import criar_classifier, criar_store
-from cortex.memory.seams import AuthorityMap, DictAuthorityMap, DictSourceOfTruth
+from cortex.memory.seams import AuthorityMap, DictAuthorityMap
 from cortex.runtime.loop import AgentLoop
 from cortex.runtime.mock_tools import criar_registry_mock
 from cortex.runtime.promotion import DOMINIO_PADRAO
 from cortex.runtime.providers import criar_provider
+
+if TYPE_CHECKING:
+    from cortex.sor.gateway import SORGateway
 
 logger = logging.getLogger("cortex.runtime")
 
@@ -55,22 +66,29 @@ def montar_engine(
     config: CortexConfig,
     provider=None,
     authority_map: AuthorityMap | None = None,
+    gateway: SORGateway | None = None,
 ) -> MemoryEngine:
     """Constrói o MemoryEngine segundo a config (classificador + store).
 
     `authority_map=None` mantém o mapa vazio (compatibilidade). O runtime
     completo passa o mapa derivado do USER.md (ver montar_runtime). A
-    SourceOfTruth entra VAZIA — SEAM do system of record / SAP (Fase 5).
+    SourceOfTruth agora é VIVA (Fase 5b): o cético confere o system of record
+    via GatewaySourceOfTruth — `gateway=None` cria o gateway da config.
     """
+    from cortex.sor.factory import criar_gateway
+    from cortex.sor.truth import GatewaySourceOfTruth
+
     if provider is None:
         provider = criar_provider(config)
+    if gateway is None:
+        gateway = criar_gateway(config)
     classifier = criar_classifier(config, provider)
     store = criar_store(config)
     return MemoryEngine(
         store=store,
         classifier=classifier,
         authority_map=authority_map or DictAuthorityMap({}),
-        source_of_truth=DictSourceOfTruth({}),
+        source_of_truth=GatewaySourceOfTruth(gateway),
     )
 
 
@@ -142,14 +160,23 @@ def montar_runtime(
     lembrar de uma conversa para outra (e, com store=graphiti, entre
     execuções). O provider é compartilhado entre o loop e o LLMClassifier.
     """
+    from cortex.sor.factory import criar_gateway
+    from cortex.sor.tools import registrar_tools_sor
+
     provider = criar_provider(config)
-    engine = montar_engine(config, provider, authority_map=autoridade_da_persona(persona))
+    # Um único gateway do SOR serve o cético (GatewaySourceOfTruth) E as tools
+    # vivas — a mesma fonte de dado vivo do Data Plane para conferir e consultar.
+    gateway = criar_gateway(config)
+    engine = montar_engine(
+        config, provider, authority_map=autoridade_da_persona(persona), gateway=gateway
+    )
     audit = AuditTrail(config.audit_path) if config.audit else None
     decision = montar_decision_engine(
         config, persona, buscar_excecao=engine.consumir_excecao, audit=audit
     )
     registry = criar_registry_mock(persona.tools)
     registrar_kb(registry, config, persona)
+    registrar_tools_sor(registry, gateway)
     loop = AgentLoop(
         provider,
         registry,

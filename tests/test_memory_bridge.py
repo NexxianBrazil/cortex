@@ -54,10 +54,18 @@ def _novo_engine() -> MemoryEngine:
     )
 
 
-def _stub_consulta_preco() -> LLMResponse:
+def _pedido_emitir_cotacao(cliente: str = "CLI-001") -> LLMResponse:
     return LLMResponse(
         tool_calls=[
-            ToolCall(id="t1", nome="consultar_preco", argumentos={"codigo_produto": "PRD-001"})
+            ToolCall(
+                id="t1",
+                nome="emitir_cotacao",
+                argumentos={
+                    "cliente_id": cliente,
+                    "itens": [{"codigo": "PRD-001", "qtd": 1}],
+                    "condicao_pagamento": "28 DDL",
+                },
+            )
         ]
     )
 
@@ -67,42 +75,44 @@ def _stub_consulta_preco() -> LLMResponse:
 # ---------------------------------------------------------------------------
 
 
-def test_mariana_lembra_entre_sessoes(persona):
+def test_mariana_lembra_entre_sessoes(persona, promove_cotacao):
     """Sessão 1 aprende um fato (via tool) e promove; sessão 2 o recupera.
 
     Mesmo engine/store entre as duas sessões (runtime efêmero, memória não).
+    Usa o extrator de teste (promove_cotacao): a máquina de promoção é genérica
+    — preço, por doutrina (Plano 4), NÃO é o que se memoriza.
     """
     from cortex.runtime import StubProvider, criar_registry_mock
 
     engine = _novo_engine()
     registry = criar_registry_mock(persona.tools)
 
-    # --- Sessão 1: stub pede a tool, recebe o preço, conclui em texto. ---
+    # --- Sessão 1: stub pede a tool, emite a cotação, conclui em texto. ---
     stub1 = StubProvider(
-        roteiro=[_stub_consulta_preco(), LLMResponse(texto="O preço do PRD-001 é R$ 1250,00.")]
+        roteiro=[_pedido_emitir_cotacao(), LLMResponse(texto="Cotação COT-CLI-001-0001 emitida.")]
     )
     loop1 = AgentLoop(stub1, registry, memory=engine)
     s1 = Session(persona)
-    loop1.executar_turno(s1, "Qual o preço do PRD-001?")
+    loop1.executar_turno(s1, "Emita uma cotação para o CLI-001.")
 
     # O fato foi promovido à memória (passou pelo observe()).
-    ativo = engine.active("produto:PRD-001:preco")
+    ativo = engine.active("cliente:CLI-001:ultima_cotacao")
     assert ativo is not None
-    assert "1250" in ativo.value
-    assert ativo.source.name == "consultar_preco"
+    assert "COT-CLI-001-0001" in ativo.value
+    assert ativo.source.name == "emitir_cotacao"
 
     # --- Sessão 2: nova Session/stub/loop, MESMO engine. ---
-    stub2 = StubProvider(roteiro=[LLMResponse(texto="O preço que tenho é R$ 1250,00.")])
+    stub2 = StubProvider(roteiro=[LLMResponse(texto="A última foi a COT-CLI-001-0001.")])
     loop2 = AgentLoop(stub2, registry, memory=engine)
     s2 = Session(persona)
     assert s2.historico == []  # runtime efêmero: a sessão nasce vazia
 
-    loop2.executar_turno(s2, "Você lembra o preço do PRD-001?")
+    loop2.executar_turno(s2, "Você lembra a última cotação do CLI-001?")
 
     # O belief foi RECUPERADO e injetado no system prompt da sessão 2.
     system_usado = stub2.chamadas[0][0]
-    assert "produto:PRD-001:preco" in system_usado
-    assert "1250" in system_usado
+    assert "cliente:CLI-001:ultima_cotacao" in system_usado
+    assert "COT-CLI-001-0001" in system_usado
     assert "Memória — o que você já sabe" in system_usado
 
 
@@ -125,27 +135,31 @@ def test_promocao_conservadora_conversa_generica_nao_vira_belief(persona):
     assert engine.store.all_beliefs() == []  # nada promovido
 
 
-def test_extrair_candidatos_ignora_texto_e_erros(persona):
+def test_extrair_candidatos_ignora_texto_e_erros(persona, promove_cotacao):
     """A regra de candidatos só pega resultado de tool com extrator; resto não."""
     from cortex.runtime import Message, Role
 
     mensagens = [
-        Message(role=Role.USER, content="me vê um preço"),
+        Message(role=Role.USER, content="emite uma cotação"),
         Message(role=Role.ASSISTANT, content="claro"),
         # tool com erro → ignorada
-        Message(role=Role.TOOL, content="ERRO: x", nome_tool="consultar_preco", erro=True),
-        # tool sem extrator → ignorada
-        Message(role=Role.TOOL, content='{"x":1}', nome_tool="enviar_email"),
-        # tool válida → 1 candidato
+        Message(role=Role.TOOL, content="ERRO: x", nome_tool="emitir_cotacao", erro=True),
+        # tool sem extrator → ignorada (preço é dado vivo: nunca promove)
         Message(
             role=Role.TOOL,
-            content='{"codigo_produto":"PRD-002","preco_unitario":380.5,"moeda":"BRL"}',
+            content='{"encontrado":true,"preco_unitario":1250.0}',
             nome_tool="consultar_preco",
+        ),
+        # tool válida com extrator → 1 candidato
+        Message(
+            role=Role.TOOL,
+            content='{"cliente_id":"CLI-002","numero_cotacao":"COT-CLI-002-0001"}',
+            nome_tool="emitir_cotacao",
         ),
     ]
     candidatos = extrair_candidatos(mensagens)
     assert len(candidatos) == 1
-    assert candidatos[0].key == "produto:PRD-002:preco"
+    assert candidatos[0].key == "cliente:CLI-002:ultima_cotacao"
     assert candidatos[0].source.kind is SourceKind.TOOL
 
 
@@ -197,24 +211,24 @@ def test_recuperacao_injeta_enxuto_no_contexto():
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_efemero_morre_so_promovido_sobrevive(persona):
+def test_runtime_efemero_morre_so_promovido_sobrevive(persona, promove_cotacao):
     from cortex.runtime import StubProvider, criar_registry_mock
 
     engine = _novo_engine()
     registry = criar_registry_mock(persona.tools)
     stub = StubProvider(
-        roteiro=[_stub_consulta_preco(), LLMResponse(texto="pronto")]
+        roteiro=[_pedido_emitir_cotacao(), LLMResponse(texto="pronto")]
     )
     loop = AgentLoop(stub, registry, memory=engine)
 
     s1 = Session(persona)
-    loop.executar_turno(s1, "preço do PRD-001?")
+    loop.executar_turno(s1, "cotação para o CLI-001?")
     assert s1.historico  # a sessão 1 acumulou histórico durante o turno
 
     s2 = Session(persona)
     assert s2.historico == []  # ...mas uma sessão nova nasce sem nada
     # O promovido, sim, sobrevive no motor de memória.
-    assert engine.active("produto:PRD-001:preco") is not None
+    assert engine.active("cliente:CLI-001:ultima_cotacao") is not None
 
 
 # ---------------------------------------------------------------------------

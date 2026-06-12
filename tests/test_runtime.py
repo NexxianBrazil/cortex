@@ -34,7 +34,16 @@ def persona():
 
 @pytest.fixture()
 def registry(persona):
-    return criar_registry_mock(persona.tools)
+    """Registry de dev: mocks (emitir_cotacao/enviar_email) + tools vivas do SOR.
+
+    Fase 5b: consultar_preco saiu das mocks e virou tool viva sobre o gateway;
+    o MockSORGateway é a fonte de dado de brinquedo (PRD-001 → R$ 1250,00).
+    """
+    from cortex.sor import MockSORGateway, registrar_tools_sor
+
+    reg = criar_registry_mock(persona.tools)
+    registrar_tools_sor(reg, MockSORGateway())
+    return reg
 
 
 def _pedido_consultar_preco(id_: str = "tc-1") -> LLMResponse:

@@ -89,6 +89,13 @@ class ToolDeclaration(_ModeloBase):
     risco_base: RiskLevel = Field(
         description="Risco intrínseco da ação; consumido pela Decision Engine (Fase 4)"
     )
+    system_of_record: bool = Field(
+        default=False,
+        description=(
+            "Dado VIVO de system of record (SAP/SQL): consulta-se ao vivo, nunca "
+            "se memoriza o valor (Plano 4, Fase 5b). A consulta vira evento de audit."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

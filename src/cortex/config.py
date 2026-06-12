@@ -95,6 +95,20 @@ class CortexConfig(BaseSettings):
         description="Modelo de embedding (ex.: nomic-embed-text no Ollama); None usa o padrão",
     )
 
+    # --- system of record / gateway (Fase 5b) ---
+    sor_provider: Literal["mock", "http"] = Field(
+        default="mock",
+        description="Gateway do system of record: 'mock' (CI/dev) ou 'http' (API intermediária)",
+    )
+    sor_base_url: str | None = Field(
+        default=None,
+        description="URL base da API intermediária do SOR (obrigatório quando sor_provider='http')",
+    )
+    sor_token: SecretStr | None = Field(
+        default=None,
+        description="Token Bearer da API do SOR (de env/.env, nunca versionado)",
+    )
+
     # --- guardrails do loop ---
     max_iteracoes: int = Field(
         default=10, ge=1, description="Teto de voltas do loop por turno (guardrail de custo)"

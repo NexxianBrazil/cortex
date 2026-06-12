@@ -27,6 +27,7 @@ from cortex.runtime import (
     montar_engine,
     montar_runtime,
 )
+from cortex.sor import SORIndisponivelError, criar_gateway
 
 COMANDOS_SAIDA = {"sair", "exit", "quit"}
 
@@ -169,6 +170,45 @@ def _kb_buscar(
     return 0
 
 
+def _sor_preco(config: CortexConfig, codigo: str) -> int:
+    """Consulta o preço VIVO de um produto no system of record (debug do operador)."""
+    gateway = criar_gateway(config)
+    try:
+        preco = gateway.preco(codigo)
+    except SORIndisponivelError as exc:
+        print(f"[cortex] system of record indisponível (provider={config.sor_provider}): {exc}")
+        return 1
+    if preco is None:
+        print(f"Produto {codigo} não encontrado no SOR (provider={config.sor_provider}).")
+        return 0
+    disp = "disponível" if preco.disponivel else "indisponível"
+    print(
+        f"[SOR {config.sor_provider}] {preco.codigo_produto}: "
+        f"{preco.moeda} {preco.preco_unitario:.2f} ({disp})"
+    )
+    return 0
+
+
+def _sor_cliente(config: CortexConfig, cliente_id: str) -> int:
+    """Consulta o cadastro VIVO de um cliente no system of record (debug do operador)."""
+    gateway = criar_gateway(config)
+    try:
+        cliente = gateway.cliente(cliente_id)
+    except SORIndisponivelError as exc:
+        print(f"[cortex] system of record indisponível (provider={config.sor_provider}): {exc}")
+        return 1
+    if cliente is None:
+        print(f"Cliente {cliente_id} não encontrado no SOR (provider={config.sor_provider}).")
+        return 0
+    estado = "BLOQUEADO" if cliente.bloqueado else "ativo"
+    print(
+        f"[SOR {config.sor_provider}] {cliente.cliente_id} — {cliente.razao_social} ({estado})\n"
+        f"    limite de crédito: R$ {cliente.limite_credito:.2f} | "
+        f"condição padrão: {cliente.condicao_pagamento_padrao}"
+    )
+    return 0
+
+
 def _audit_listar(config: CortexConfig, n: int) -> int:
     """Imprime as últimas N linhas da trilha de auditoria de forma legível."""
     linhas = AuditTrail(config.audit_path).ultimos(n)
@@ -227,6 +267,13 @@ def main(argv: list[str] | None = None) -> int:
         help="inclui documentos revogados no histórico (sempre marcados ⚠)",
     )
 
+    sor = subparsers.add_parser("sor", help="System of Record: consulta dado vivo (preço/cliente)")
+    sor_sub = sor.add_subparsers(dest="acao", required=True)
+    sor_preco = sor_sub.add_parser("preco", help="consulta o preço vivo de um produto")
+    sor_preco.add_argument("codigo", help="código do produto (ex.: PRD-001)")
+    sor_cliente = sor_sub.add_parser("cliente", help="consulta o cadastro vivo de um cliente")
+    sor_cliente.add_argument("cliente_id", help="identificador do cliente (ex.: CLI-001)")
+
     audit_p = subparsers.add_parser("audit", help="inspeciona a trilha de auditoria")
     audit_p.add_argument(
         "--ultimos", type=int, default=20, help="quantas linhas mostrar (default 20)"
@@ -250,6 +297,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.acao == "indexar":
             return _kb_indexar(config)
         return _kb_buscar(config, args.pergunta, args.dominio, args.revogados)
+    if args.comando == "sor":
+        if args.acao == "preco":
+            return _sor_preco(config, args.codigo)
+        return _sor_cliente(config, args.cliente_id)
     if args.comando == "audit":
         return _audit_listar(config, args.ultimos)
     return 1

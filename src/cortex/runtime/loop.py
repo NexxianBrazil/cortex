@@ -215,6 +215,7 @@ class AgentLoop:
                     logger.info(
                         "iteração %d: tool=%s resultado=%s", iteracao, pedido.nome, conteudo
                     )
+                    self._audit_consulta_sor(session, pedido, resultado)
                 except ToolError as exc:
                     # Erro TRATÁVEL: volta para o LLM como resultado de erro,
                     # para ele se corrigir — o processo nunca cai por isso.
@@ -243,6 +244,25 @@ class AgentLoop:
         """Registra no audit, se houver — falha de escrita nunca derruba o turno."""
         if self._audit is not None:
             self._audit.registrar(tipo, **campos)
+
+    def _audit_consulta_sor(self, session: Session, pedido, resultado: dict) -> None:
+        """Registra a consulta a um system of record — lineage SEM cópia (Fase 5b).
+
+        Quando uma tool `system_of_record` executa com sucesso, gravamos QUE a
+        consulta ocorreu, com quê e o que voltou (resumo curto) — é o "decidi X
+        porque o SAP retornou Y às 14h32" da doutrina. O VALOR não é memorizado
+        (consultar_* fica fora dos extratores de promoção); o que persiste é o
+        rastro auditável da consulta.
+        """
+        decl = session.persona.tools.get(pedido.nome)
+        if decl is None or not decl.system_of_record:
+            return
+        resumo = json.dumps(resultado, ensure_ascii=False)
+        if len(resumo) > 200:
+            resumo = resumo[:197] + "..."
+        self._audit_registrar(
+            "consulta_sor", tool=pedido.nome, argumentos=pedido.argumentos, resumo=resumo
+        )
 
     def _mensagem_bloqueio(self, decisao, pedido, session: Session) -> str:
         """Monta o resultado tratável devolvido ao LLM quando a tool não executa.

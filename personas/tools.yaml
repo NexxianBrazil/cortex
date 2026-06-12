@@ -28,9 +28,12 @@ tools:
 
   - nome: consultar_preco
     descricao: >-
-      Consulta o preço de tabela e a disponibilidade de um produto no
-      catálogo interno. Ação somente leitura, sem efeito externo.
+      Consulta o preço e a disponibilidade ATUAIS de um produto — dado VIVO do
+      system of record (SAP/SQL). Consulte sempre que precisar do valor atual;
+      NUNCA confie em preço lembrado de conversa anterior (o preço muda na
+      fonte). Ação somente leitura, sem efeito externo.
     risco_base: low
+    system_of_record: true
     parametros:
       - nome: codigo_produto
         tipo: string
@@ -39,6 +42,19 @@ tools:
         tipo: integer
         descricao: Quantidade desejada, para cálculo de preço por faixa
         obrigatorio: false
+
+  - nome: consultar_cliente
+    descricao: >-
+      Consulta o cadastro comercial ATUAL de um cliente — dado VIVO do system of
+      record: razão social, limite de crédito, condição de pagamento padrão e se
+      está bloqueado. Consulte sempre que precisar do estado atual do cliente;
+      nunca confie em valor lembrado de conversa anterior. Somente leitura.
+    risco_base: low
+    system_of_record: true
+    parametros:
+      - nome: cliente_id
+        tipo: string
+        descricao: Identificador do cliente no cadastro
 
   - nome: emitir_cotacao
     descricao: >-
