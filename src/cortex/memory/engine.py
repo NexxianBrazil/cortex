@@ -28,7 +28,7 @@ from cortex.memory.models import (
 from cortex.memory.seams import AuthorityMap, SourceOfTruth
 from cortex.memory.semantic import Belief
 from cortex.memory.store import MemoryStore
-from cortex.memory.text import como_numero, normalizar
+from cortex.memory.text import como_numero, valores_equivalentes
 from cortex.risk import RiskLevel
 
 logger = logging.getLogger("cortex.memory")
@@ -292,7 +292,11 @@ class MemoryEngine:
         truth = consulta.value
         dec["source_of_truth_value"] = truth
 
-        if normalizar(value) == normalizar(truth):
+        # Comparação NUMÉRICA quando ambos os lados são números (valores do
+        # domínio são reais): '1250' do humano CONFIRMA truth 'R$ 1.250,00' em
+        # vez de ser falsamente rejeitado por diferença de formatação. Para
+        # valores não-numéricos, cai no textual normalizado (ver text.py).
+        if valores_equivalentes(value, truth):
             nova = self._supersede(
                 existing, value, source, justification, domain, conf,
                 "confirmado pela fonte de verdade",
@@ -300,7 +304,7 @@ class MemoryEngine:
             dec["action"] = "conferiu e superou (novo bate com a fonte de verdade)"
             dec["reason"] = "confirmado pela fonte de verdade"
             dec["resulting_belief_id"] = nova.id
-        elif normalizar(existing.value) == normalizar(truth):
+        elif valores_equivalentes(existing.value, truth):
             existing.seen_count += 1
             dec["action"] = "conferiu e REJEITOU o novo (vigente bate com a fonte)"
             dec["resulting_belief_id"] = existing.id

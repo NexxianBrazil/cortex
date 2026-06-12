@@ -26,6 +26,7 @@ from cortex.memory import (
     criar_classifier,
 )
 from cortex.memory.classifier import Classifier
+from cortex.memory.text import valores_equivalentes
 from cortex.risk import RiskLevel
 
 H, S = SourceKind.HUMAN, SourceKind.SYSTEM
@@ -416,3 +417,71 @@ def test_autoridade_externa_tem_teto_de_0_4(engine):
     assert ativo is not None
     # Autoridade externa teto 0.4; sem justificação extra, confiança = 0.4.
     assert ativo.confidence <= 0.4
+
+
+# ---------------------------------------------------------------------------
+# Ajuste 5b: comparação numérica na verificação contra a fonte de verdade
+# ---------------------------------------------------------------------------
+
+
+def test_valores_equivalentes_numerico_e_fallback_textual():
+    """Números equivalentes apesar do formato; texto cai no normalizado."""
+    # Mesmas grandezas em formatos pt-BR diferentes → equivalentes.
+    for forma in ("1250", "R$ 1.250,00", "R$1250,00", "1.250,00", "1250 reais"):
+        assert valores_equivalentes(forma, "R$ 1.250,00"), forma
+    # Número diferente → não equivalente.
+    assert not valores_equivalentes("1180", "R$ 1.250,00")
+    # Fallback textual para valores não-numéricos.
+    assert valores_equivalentes("À VISTA", "à vista")
+    assert not valores_equivalentes("à vista", "30 dias")
+
+
+def _engine_preco_verdade() -> MemoryEngine:
+    """Motor cuja fonte de verdade diz que o PRD-001 custa R$ 1.250,00."""
+    return MemoryEngine(
+        store=InMemoryStore(),
+        classifier=HeuristicClassifier(),
+        authority_map=DictAuthorityMap({"comercial": {"Fonte de verdade"}}),
+        source_of_truth=DictSourceOfTruth({"produto:PRD-001:preco": "R$ 1.250,00"}),
+    )
+
+
+def _seed_preco(engine: MemoryEngine, valor: str) -> None:
+    engine.observe(
+        "produto:PRD-001:preco", valor,
+        Source(name="consultar_preco", kind=S),
+        Justification(why="preço de tabela", verifiable=True),
+        domain="comercial",
+    )
+
+
+@pytest.mark.parametrize("afirmado", ["1250", "R$1250,00", "1.250,00", "1250 reais"])
+def test_humano_correto_em_outro_formato_e_confirmado_nao_rejeitado(afirmado):
+    """Humano afirma o valor CERTO noutro formato → 'confirmado', nunca 'REJEITOU'."""
+    engine = _engine_preco_verdade()
+    _seed_preco(engine, "R$ 1.250,00")
+    ep = engine.observe(
+        "produto:PRD-001:preco", afirmado,
+        Source(name="Carlos", kind=H),
+        Justification(why="cliente confirmou"),
+        domain="comercial",
+    )
+    assert ep.source_of_truth_consulted is True
+    assert ep.reason == "confirmado pela fonte de verdade"
+    assert "REJEITOU" not in ep.action
+    # O valor afirmado (equivalente ao real) passa a vigorar.
+    assert engine.active("produto:PRD-001:preco").value == afirmado
+
+
+def test_humano_errado_continua_rejeitado():
+    """Humano afirma valor numérico DIFERENTE → vigente bate com a fonte, rejeita."""
+    engine = _engine_preco_verdade()
+    _seed_preco(engine, "R$ 1.250,00")
+    ep = engine.observe(
+        "produto:PRD-001:preco", "1180",
+        Source(name="Carlos", kind=H),
+        Justification(why="cliente alegou"),
+        domain="comercial",
+    )
+    assert "REJEITOU" in ep.action
+    assert engine.active("produto:PRD-001:preco").value == "R$ 1.250,00"
