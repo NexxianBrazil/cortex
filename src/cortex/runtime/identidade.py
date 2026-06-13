@@ -28,7 +28,12 @@ DELIM_FIM = "<<<FIM_DADO_EXTERNO>>>"
 
 
 def _delim_inicio(canal: str, canal_id: str) -> str:
-    return f"<<<DADO_EXTERNO canal={canal} id={canal_id}>>>"
+    # canal/canal_id vêm do BRIDGE (não-confiável): sanitizar ANTES de interpolar
+    # no cabeçalho, ou um id malicioso fecha o bloco e injeta texto solto.
+    return (
+        f"<<<DADO_EXTERNO canal={_campo_cabecalho_seguro(canal)} "
+        f"id={_campo_cabecalho_seguro(canal_id)}>>>"
+    )
 
 
 @dataclass(frozen=True)
@@ -85,8 +90,24 @@ def identidade_interna(
 
 
 def _neutralizar_delimitador(texto: str) -> str:
-    """Neutraliza marcadores `<<<`/`>>>` no texto externo: não pode forjar o bloco."""
+    """Neutraliza marcadores `<<<`/`>>>` no texto externo.
+
+    Cobre os DOIS lados do ataque: ABRIR um bloco falso (`<<<DADO_EXTERNO...`) e
+    FECHAR o bloco real (`...>>>` / `<<<FIM_DADO_EXTERNO>>>`) — qualquer `<<<` ou
+    `>>>` vira um marcador inerte, então o atacante não forja nem encerra bloco.
+    """
     return texto.replace("<<<", "‹‹‹").replace(">>>", "›››")
+
+
+def _campo_cabecalho_seguro(s: str) -> str:
+    """Sanitiza um metadado do cabeçalho do bloco externo (canal/canal_id).
+
+    O cabeçalho é UMA LINHA. Além de neutralizar os marcadores `<<<`/`>>>`,
+    remove quebras de linha (\\n, \\r): nada vindo do bridge pode fechar o bloco
+    nem quebrar a linha do cabeçalho para soltar texto fora dos delimitadores.
+    Vale para qualquer metadado futuro do cabeçalho.
+    """
+    return _neutralizar_delimitador(s).replace("\r", " ").replace("\n", " ")
 
 
 def demarcar_entrada(texto: str, identidade: Identidade | None) -> str:
