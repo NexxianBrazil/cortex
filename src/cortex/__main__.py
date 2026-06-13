@@ -8,8 +8,9 @@ chave nenhuma — provider real é decisão de config, não de código.
 import argparse
 import logging
 import sys
+from pathlib import Path
 
-from cortex.config import CortexConfig
+from cortex.config import CortexConfig, carregar_config
 from cortex.governance import AuditTrail
 from cortex.identity import carregar_persona
 from cortex.knowledge import KBIndexError, KnowledgeBase, criar_embedder
@@ -21,9 +22,12 @@ from cortex.memory import (
     PropostaJaDecididaError,
 )
 from cortex.runtime import (
+    Identidade,
     LoopLimiteExcedidoError,
     Session,
     autoridade_da_persona,
+    identidade_externa,
+    identidade_interna,
     montar_engine,
     montar_runtime,
 )
@@ -32,19 +36,35 @@ from cortex.sor import SORIndisponivelError, criar_gateway
 COMANDOS_SAIDA = {"sair", "exit", "quit"}
 
 
-def _chat(config: CortexConfig) -> int:
+def _resolver_identidade_chat(
+    persona, como: str | None, externo: bool
+) -> Identidade | None:
+    """Identidade para o `cortex chat`: --como NOME (interno) | --externo | dev (None)."""
+    if externo:
+        return identidade_externa("cli", "externo")
+    if como:
+        return identidade_interna(persona, como, canal="cli", canal_id=como)
+    return None
+
+
+def _chat(config: CortexConfig, identidade: Identidade | None) -> int:
     persona = carregar_persona(config.personas_dir)
     loop, _engine = montar_runtime(config, persona)
-    session = Session(persona)
+    session = Session(persona, identidade=identidade)
 
+    como = (
+        f" | como {identidade.nome} ({identidade.procedencia.value})"
+        if identidade is not None
+        else ""
+    )
     print(
         f"Cortex — conversando com {persona.soul.nome} ({persona.soul.papel}) "
         f"[provider={config.provider} | classifier={config.classifier} | "
-        f"store={config.store} | decisão={config.decision_mode}]"
+        f"store={config.store} | decisão={config.decision_mode}{como}]"
     )
     print(
         "Digite 'sair' (ou Ctrl-D) para encerrar. A conversa é efêmera; o que a "
-        "Mariana aprende é promovido à memória.\n"
+        "persona aprende é promovido à memória.\n"
     )
 
     while True:
@@ -240,12 +260,97 @@ def _audit_listar(config: CortexConfig, n: int) -> int:
     return 0
 
 
+def _novo(args) -> int:
+    """Gera um deploy de Cortex novo a partir dos templates e o valida."""
+    from cortex.scaffold import ScaffoldError, gerar_deploy, proximos_passos
+
+    try:
+        destino = gerar_deploy(
+            args.diretorio,
+            nome=args.nome,
+            funcao=args.funcao,
+            gestor=args.gestor,
+            dominio=args.dominio,
+        )
+    except ScaffoldError as exc:
+        print(f"[cortex] {exc}")
+        return 1
+    print(proximos_passos(destino))
+    return 0
+
+
+def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: int | None) -> int:
+    """Sobe o gateway HTTP do deploy (FastAPI/uvicorn)."""
+    import uvicorn
+
+    from cortex.server import carregar_mapa_identidades, criar_app
+
+    persona = carregar_persona(config.personas_dir)
+    loop, _engine = montar_runtime(config, persona)
+    deploy_dir = Path(deploy) if deploy else Path.cwd()
+    mapa = carregar_mapa_identidades(deploy_dir / "canais.yaml", persona)
+    token = config.server_token.get_secret_value() if config.server_token else None
+    if token is None:
+        print(
+            "[cortex] aviso: sem server_token na config — o gateway recusará tudo (401). "
+            "Gere um deploy com `cortex novo` ou defina server_token no cortex.toml."
+        )
+    app = criar_app(
+        persona=persona,
+        loop=loop,
+        mapa_identidades=mapa,
+        token=token,
+        ttl_minutos=config.session_ttl_minutos,
+    )
+    host = host or config.server_host
+    porta = porta or config.server_porta
+    print(
+        f"Cortex {persona.soul.nome} ({persona.soul.papel}) ouvindo em "
+        f"http://{host}:{porta}  [deploy={deploy_dir} | {len(mapa)} canal(is) mapeado(s)]"
+    )
+    uvicorn.run(app, host=host, port=porta, log_level="info")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cortex", description="Cortex — runtime da ACP")
     subparsers = parser.add_subparsers(dest="comando", required=True)
-    subparsers.add_parser("chat", help="abre uma sessão de conversa com a persona")
 
-    fila = subparsers.add_parser("fila", help="Learning Queue: lista/aprova/rejeita propostas")
+    # --deploy: carrega o cortex.toml de um deploy auto-contido (Fase 7a). Sem
+    # ele, usa o CWD (o repo é o deploy de desenvolvimento da Mariana).
+    comum = argparse.ArgumentParser(add_help=False)
+    comum.add_argument(
+        "--deploy", default=None, metavar="DIR", help="diretório do deploy (cortex.toml)"
+    )
+
+    chat = subparsers.add_parser(
+        "chat", parents=[comum], help="abre uma sessão de conversa com a persona"
+    )
+    chat.add_argument(
+        "--como", default=None, metavar="NOME", help="fala como esta pessoa do USER.md (interno)"
+    )
+    chat.add_argument(
+        "--externo", action="store_true", help="simula um remetente desconhecido (externo)"
+    )
+
+    novo = subparsers.add_parser("novo", help="cria um Cortex novo (scaffold de uma ACP)")
+    novo.add_argument("diretorio", help="diretório do novo deploy (deve estar vazio)")
+    novo.add_argument("--nome", required=True, help="nome da persona (ex.: Rafael)")
+    novo.add_argument("--funcao", required=True, help="função/papel (ex.: 'suporte técnico')")
+    novo.add_argument("--gestor", required=True, help="nome do gestor humano")
+    novo.add_argument("--dominio", default="geral", help="domínio operacional (rótulo)")
+
+    servir = subparsers.add_parser(
+        "servir", parents=[comum], help="sobe o gateway HTTP do deploy (para bridges)"
+    )
+    servir.add_argument("--host", default=None, help="host de escuta (default da config)")
+    servir.add_argument(
+        "--porta", type=int, default=None, help="porta de escuta (default da config)"
+    )
+
+    fila = subparsers.add_parser(
+        "fila", parents=[comum], help="Learning Queue: lista/aprova/rejeita propostas"
+    )
     fila_sub = fila.add_subparsers(dest="acao")  # sem ação = listar
     for nome in ("aprovar", "rejeitar"):
         sp = fila_sub.add_parser(nome, help=f"{nome} uma proposta pendente")
@@ -255,7 +360,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         sp.add_argument("--razao", required=True, help="motivo da decisão (vira memória)")
 
-    kb = subparsers.add_parser("kb", help="Knowledge Base: (re)indexa e consulta a KB curada")
+    kb = subparsers.add_parser(
+        "kb", parents=[comum], help="Knowledge Base: (re)indexa e consulta a KB curada"
+    )
     kb_sub = kb.add_subparsers(dest="acao", required=True)
     kb_sub.add_parser("indexar", help="(re)indexa a KB inteira — ato deliberado do curador")
     kb_buscar = kb_sub.add_parser("buscar", help="consulta a KB (debug do curador)")
@@ -267,14 +374,18 @@ def main(argv: list[str] | None = None) -> int:
         help="inclui documentos revogados no histórico (sempre marcados ⚠)",
     )
 
-    sor = subparsers.add_parser("sor", help="System of Record: consulta dado vivo (preço/cliente)")
+    sor = subparsers.add_parser(
+        "sor", parents=[comum], help="System of Record: consulta dado vivo (preço/cliente)"
+    )
     sor_sub = sor.add_subparsers(dest="acao", required=True)
     sor_preco = sor_sub.add_parser("preco", help="consulta o preço vivo de um produto")
     sor_preco.add_argument("codigo", help="código do produto (ex.: PRD-001)")
     sor_cliente = sor_sub.add_parser("cliente", help="consulta o cadastro vivo de um cliente")
     sor_cliente.add_argument("cliente_id", help="identificador do cliente (ex.: CLI-001)")
 
-    audit_p = subparsers.add_parser("audit", help="inspeciona a trilha de auditoria")
+    audit_p = subparsers.add_parser(
+        "audit", parents=[comum], help="inspeciona a trilha de auditoria"
+    )
     audit_p.add_argument(
         "--ultimos", type=int, default=20, help="quantas linhas mostrar (default 20)"
     )
@@ -286,9 +397,26 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    config = CortexConfig()
+    # `novo` cria um deploy — não carrega config de um deploy existente.
+    if args.comando == "novo":
+        return _novo(args)
+
+    try:
+        config = carregar_config(args.deploy)
+    except (FileNotFoundError, OSError) as exc:
+        print(f"[cortex] não consegui carregar o deploy: {exc}")
+        return 1
+
     if args.comando == "chat":
-        return _chat(config)
+        persona = carregar_persona(config.personas_dir)
+        try:
+            identidade = _resolver_identidade_chat(persona, args.como, args.externo)
+        except ValueError as exc:
+            print(f"[cortex] {exc}")
+            return 1
+        return _chat(config, identidade)
+    if args.comando == "servir":
+        return _servir(config, args.deploy, args.host, args.porta)
     if args.comando == "fila":
         if args.acao in ("aprovar", "rejeitar"):
             return _fila_decidir(config, args.acao, args.id, args.autor, args.razao)

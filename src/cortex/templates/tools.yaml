@@ -1,0 +1,52 @@
+# =========================================================================
+# Catálogo de TOOLS deste Cortex. Cada ação é declarada UMA vez aqui e
+# referenciada pelos playbooks pelo nome. consultar_kb é o núcleo (consulta a
+# verdade declarada da empresa); consultar_preco/consultar_cliente são dado
+# VIVO do system of record (consulta-se ao vivo, nunca se memoriza — Plano 4).
+# Acrescente as tools específicas desta função conforme curar os playbooks.
+# =========================================================================
+tools:
+  - nome: consultar_kb
+    descricao: >-
+      Consulta a Knowledge Base — a VERDADE DECLARADA da empresa (políticas,
+      regras, prazos, condições). Consulte SEMPRE que a pergunta envolver
+      política, regra, prazo ou condição: a KB prevalece sobre o que você
+      lembra. Devolve trechos com fonte, autoridade e vigência; só o vigente.
+      Se nada for relevante, diga isso — não invente política.
+    risco_base: low
+    parametros:
+      - nome: pergunta
+        tipo: string
+        descricao: 'A pergunta em linguagem natural (ex.: "qual o prazo de garantia?")'
+      - nome: dominio
+        tipo: string
+        descricao: Domínio para filtrar (opcional)
+        obrigatorio: false
+
+  - nome: consultar_preco
+    descricao: >-
+      Consulta o preço e a disponibilidade ATUAIS de um produto — dado VIVO do
+      system of record. Consulte sempre que precisar do valor atual; nunca
+      confie em preço lembrado de conversa anterior. Somente leitura.
+    risco_base: low
+    system_of_record: true
+    parametros:
+      - nome: codigo_produto
+        tipo: string
+        descricao: Código do produto no catálogo interno
+      - nome: quantidade
+        tipo: integer
+        descricao: Quantidade desejada, para cálculo por faixa
+        obrigatorio: false
+
+  - nome: consultar_cliente
+    descricao: >-
+      Consulta o cadastro comercial ATUAL de um cliente — dado VIVO do system of
+      record: razão social, limite de crédito, condição padrão e bloqueio.
+      Consulte sempre que precisar do estado atual; somente leitura.
+    risco_base: low
+    system_of_record: true
+    parametros:
+      - nome: cliente_id
+        tipo: string
+        descricao: Identificador do cliente no cadastro

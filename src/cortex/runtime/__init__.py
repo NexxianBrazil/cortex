@@ -10,6 +10,13 @@ from cortex.runtime.app import (
     montar_engine,
     montar_runtime,
 )
+from cortex.runtime.identidade import (
+    Identidade,
+    demarcar_entrada,
+    identidade_externa,
+    identidade_interna,
+    papel_no_user_md,
+)
 from cortex.runtime.loop import AgentLoop, LoopLimiteExcedidoError, montar_system_prompt
 from cortex.runtime.messages import LLMResponse, Message, Role, ToolCall
 from cortex.runtime.mock_tools import criar_registry_mock
@@ -40,6 +47,7 @@ __all__ = [
     "ArgumentosInvalidosError",
     "ClaudeProvider",
     "ConfiguracaoProviderError",
+    "Identidade",
     "LLMProvider",
     "LLMResponse",
     "LoopLimiteExcedidoError",
@@ -56,10 +64,14 @@ __all__ = [
     "autoridade_da_persona",
     "criar_provider",
     "criar_registry_mock",
+    "demarcar_entrada",
     "extrair_candidatos",
+    "identidade_externa",
+    "identidade_interna",
     "montar_engine",
     "montar_runtime",
     "montar_system_prompt",
+    "papel_no_user_md",
     "promover",
     "recuperar_beliefs",
 ]

@@ -1,0 +1,26 @@
+# =========================================================================
+# Deploy auto-contido do Cortex "$nome" (função: $papel).
+# Caminhos são RELATIVOS a este diretório — um Cortex é um deploy on-prem
+# sem estado compartilhado. Chaves de API vêm do ambiente/.env, nunca daqui.
+# =========================================================================
+
+# Provedor de LLM: "stub" (sem rede, padrão de validação) | "claude" | "openai".
+provider = "stub"
+
+# Persistência da memória: "memory" (efêmera, padrão) | "graphiti" (Kuzu local).
+store = "memory"
+
+# Formação, KB e auditoria — tudo dentro deste deploy.
+personas_dir = "personas"
+kb_path = "kb"
+audit_path = "audit/decisions.jsonl"
+
+# Domínio operacional desta ACP (rótulo; ver README).
+# dominio = "$dominio"
+
+# Servidor HTTP (cortex servir). O token autentica o BRIDGE (n8n etc.), não o
+# remetente — a identidade do remetente vem do canais.yaml.
+server_token = "$token"
+server_host = "127.0.0.1"
+server_porta = 8420
+session_ttl_minutos = 30

@@ -12,6 +12,7 @@ As CHAVES de API vêm SEMPRE de variável de ambiente / .env — nunca de
 arquivo versionado. Por isso são `SecretStr`: não vazam em logs nem em repr.
 """
 
+import tomllib
 from pathlib import Path
 from typing import Literal
 
@@ -109,6 +110,24 @@ class CortexConfig(BaseSettings):
         description="Token Bearer da API do SOR (de env/.env, nunca versionado)",
     )
 
+    # --- servidor HTTP (Fase 7a) ---
+    server_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Token do bridge (header X-Cortex-Token); autentica o TRANSPORTE, não o "
+            "remetente (a identidade do remetente vem do canal/canais.yaml)"
+        ),
+    )
+    server_host: str = Field(
+        default="127.0.0.1", description="Host do `cortex servir` (default loopback)"
+    )
+    server_porta: int = Field(default=8420, description="Porta do `cortex servir`")
+    session_ttl_minutos: int = Field(
+        default=30,
+        ge=1,
+        description="Inatividade (min) após a qual a próxima mensagem do contato abre Session nova",
+    )
+
     # --- guardrails do loop ---
     max_iteracoes: int = Field(
         default=10, ge=1, description="Teto de voltas do loop por turno (guardrail de custo)"
@@ -147,3 +166,37 @@ class CortexConfig(BaseSettings):
             TomlConfigSettingsSource(settings_cls),
             file_secret_settings,
         )
+
+
+# Campos que são CAMINHOS: num deploy auto-contido (Fase 7a), o cortex.toml os
+# escreve relativos ao diretório do deploy; carregar_config os resolve contra ele.
+_CAMPOS_DE_CAMINHO = ("personas_dir", "kb_path", "audit_path", "kuzu_db_path")
+
+
+def carregar_config(deploy: Path | str | None = None) -> CortexConfig:
+    """Carrega a config — do deploy (Fase 7a) ou do diretório atual (dev/Mariana).
+
+    `deploy=None` mantém o comportamento histórico: lê config.toml/.env do CWD
+    (o repo é o deploy de desenvolvimento da Mariana). Com um diretório, lê o
+    `cortex.toml` de lá e resolve TODOS os caminhos contra o deploy — um Cortex
+    é um deploy auto-contido on-prem, sem estado compartilhado entre Cortexes.
+
+    Os valores do toml entram como `init_settings` (precedência máxima); chaves
+    de API seguem vindo do ambiente/.env — segredo nunca mora no toml versionado
+    (o server_token, gerado pelo scaffold, é a exceção local do deploy).
+    """
+    if deploy is None:
+        return CortexConfig()
+
+    deploy = Path(deploy).resolve()
+    toml = deploy / "cortex.toml"
+    if not toml.is_file():
+        raise FileNotFoundError(
+            f"deploy sem cortex.toml: {toml}. Gere um Cortex com `cortex novo <dir>`."
+        )
+    dados = tomllib.loads(toml.read_text(encoding="utf-8"))
+    for campo in _CAMPOS_DE_CAMINHO:
+        if campo in dados:
+            caminho = Path(dados[campo])
+            dados[campo] = caminho if caminho.is_absolute() else deploy / caminho
+    return CortexConfig(**dados)

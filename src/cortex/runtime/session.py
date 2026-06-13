@@ -5,8 +5,15 @@ sessão. Nada é escrito em disco ou banco. Nesta fase o profissional digital
 trabalha, mas não lembra — a memória persistente é a Fase 3.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from cortex.identity.models import Persona
 from cortex.runtime.messages import Message
+
+if TYPE_CHECKING:
+    from cortex.runtime.identidade import Identidade
 
 
 class Session:
@@ -15,10 +22,16 @@ class Session:
     Guarda a persona carregada e o histórico de mensagens do turno em
     andamento (no formato interno). Criar uma Session nova = começar do zero,
     sem nenhum resquício da anterior.
+
+    `identidade` (Fase 7a) é quem fala nesta conversa, autenticado pelo CANAL
+    (não pelo texto). Fica disponível para o loop demarcar conteúdo externo e
+    auditar o turno — e, na 7b, será o Source dos fatos aprendidos da conversa.
+    None = modo dev sem canal (a entrada não é demarcada).
     """
 
-    def __init__(self, persona: Persona) -> None:
+    def __init__(self, persona: Persona, identidade: Identidade | None = None) -> None:
         self.persona = persona
+        self.identidade = identidade
         self.historico: list[Message] = []
 
     # ------------------------------------------------------------------

@@ -1,0 +1,19 @@
+# =========================================================================
+# Mapa de IDENTIDADE por canal (dono: CLIENTE — alocação, NUNCA sobe).
+# A autoridade segue o CANAL autenticado, nunca o conteúdo: o número/endereço
+# mapeado abaixo é INTERNO com o nome real; QUALQUER remetente não mapeado é
+# EXTERNO "desconhecido(...)", mesmo que a mensagem alegue ser o gestor.
+#
+# `pessoa` TEM de existir no USER.md (gestor ou colega) — nome órfão aqui é
+# erro de configuração e impede o `cortex servir` de subir.
+#
+# Descomente e ajuste os exemplos abaixo com os contatos reais:
+# identidades:
+#   - canal: whatsapp
+#     canal_id: "+5511999990000"
+#     pessoa: "$gestor"
+#   - canal: email
+#     canal_id: "gestor@empresa.com.br"
+#     pessoa: "$gestor"
+# =========================================================================
+identidades: []
