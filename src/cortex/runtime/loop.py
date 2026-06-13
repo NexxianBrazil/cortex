@@ -21,7 +21,7 @@ from cortex.memory.learning import propor_acao
 from cortex.memory.semantic import Belief
 from cortex.runtime.identidade import DELIM_FIM, demarcar_entrada
 from cortex.runtime.messages import Message, Role
-from cortex.runtime.promotion import DOMINIO_PADRAO, promover
+from cortex.runtime.promotion import DOMINIO_PADRAO, promover_fim_de_turno
 from cortex.runtime.providers.base import LLMProvider
 from cortex.runtime.recall import formatar_beliefs, recuperar_beliefs
 from cortex.runtime.session import Session
@@ -121,6 +121,8 @@ class AgentLoop:
         recall_limite: int = 5,
         decision: DecisionEngine | None = None,
         audit=None,
+        extrator_conversa=None,
+        contexto_turno=None,
     ) -> None:
         if max_iteracoes < 1:
             raise ValueError("max_iteracoes deve ser >= 1")
@@ -138,6 +140,12 @@ class AgentLoop:
         # audit=None: sem trilha durável (só os logs). Com AuditTrail, registra
         # custo por request de LLM e um resumo por turno (Fase 4c).
         self._audit = audit
+        # extrator_conversa=None mantém só a promoção de tools (3c). Com ele, o
+        # fim do turno também ouve a conversa (7b) — pelo MESMO observe().
+        self._extrator_conversa = extrator_conversa
+        # contexto_turno: holder partilhado com a tool gerenciar_fila (7b); o
+        # loop publica nele a identidade do turno corrente (turnos serializados).
+        self._contexto_turno = contexto_turno
 
     def executar_turno(self, session: Session, entrada_usuario: str) -> str:
         """Roda um turno completo e devolve a resposta final em texto.
@@ -147,6 +155,11 @@ class AgentLoop:
         memória persistente (escrita). Levanta LoopLimiteExcedidoError se o LLM
         não concluir dentro do teto — preferimos falhar alto a queimar tokens.
         """
+        # Publica a identidade do turno para a tool gerenciar_fila (7b): a
+        # autoridade dela segue o canal, e o canal é esta Session.
+        if self._contexto_turno is not None:
+            self._contexto_turno.identidade = session.identidade
+
         # Marca o início do turno para a promoção olhar só o que aconteceu agora.
         inicio_turno = len(session.historico)
         # Conteúdo de procedência EXTERNA entra DEMARCADO como dado (Fase 7a);
@@ -185,9 +198,16 @@ class AgentLoop:
                 session.historico.append(Message(role=Role.ASSISTANT, content=texto))
                 logger.info("turno concluído na iteração %d", iteracao)
                 if self._memory is not None:
-                    # Promoção no FIM do turno (decisão 1): só candidatos claros,
-                    # pelo crivo do observe(). Ver runtime/promotion.py.
-                    promover(self._memory, session.historico[inicio_turno:])
+                    # Promoção no FIM do turno: candidatos de TOOL (3c) + de
+                    # CONVERSA (7b), todos pelo crivo do observe(). O Source dos
+                    # fatos de conversa é a identidade autenticada da Session.
+                    promover_fim_de_turno(
+                        self._memory,
+                        session.historico[inicio_turno:],
+                        extrator_conversa=self._extrator_conversa,
+                        identidade=session.identidade,
+                        audit=self._audit,
+                    )
                 ident = session.identidade
                 self._audit_registrar(
                     "turno",

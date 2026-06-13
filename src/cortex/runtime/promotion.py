@@ -18,9 +18,12 @@ que relê episódios e destila crenças mais ricas) é trabalho FUTURO — não 
 fase. Aqui a promoção é síncrona e mínima.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
@@ -28,6 +31,10 @@ from cortex.memory.engine import MemoryEngine
 from cortex.memory.episodic import Episode
 from cortex.memory.models import Justification, Source
 from cortex.runtime.messages import Message, Role
+
+if TYPE_CHECKING:
+    from cortex.runtime.extracao_conversa import ExtratorConversa
+    from cortex.runtime.identidade import Identidade
 
 logger = logging.getLogger("cortex.runtime")
 
@@ -87,15 +94,67 @@ def extrair_candidatos(mensagens_do_turno: Sequence[Message]) -> list[PromotionC
 
 
 def promover(engine: MemoryEngine, mensagens_do_turno: Sequence[Message]) -> list[Episode]:
-    """Promove os candidatos do turno pelo observe() do motor (crivo completo).
+    """Promove só os candidatos de TOOL do turno pelo observe() (régua da 3c).
 
-    Devolve os episódios gerados — útil para auditoria/teste. Cada candidato
-    passa pelo ceticismo/supersessão; nada entra na memória por fora do motor.
+    Mantida para compatibilidade; o fim de turno completo usa
+    `promover_fim_de_turno`, que junta também os fatos da conversa (7b).
     """
     episodios: list[Episode] = []
     for c in extrair_candidatos(mensagens_do_turno):
         episodios.append(
             engine.observe(c.key, c.value, c.source, c.justification, domain=c.domain)
+        )
+    if episodios:
+        logger.info("promovidos %d candidato(s) de tool à memória", len(episodios))
+    return episodios
+
+
+def promover_fim_de_turno(
+    engine: MemoryEngine,
+    mensagens_do_turno: Sequence[Message],
+    *,
+    extrator_conversa: ExtratorConversa | None = None,
+    identidade: Identidade | None = None,
+    audit=None,
+) -> list[Episode]:
+    """Promove candidatos de DUAS fontes pelo MESMO observe() (7b).
+
+    Ordem: tools primeiro (fonte mais forte), conversa depois. Dedup simples por
+    `key+value` exato — um fato de conversa idêntico ao de uma tool do mesmo
+    turno é descartado (a tool é a fonte melhor). A conversa só é ouvida quando
+    há identidade autenticada do turno (sem canal, sem Source — não se aprende).
+
+    Cada fato de conversa promovido gera um evento de audit `aprendizado_conversa`
+    (chave, procedência, desfecho) — o rastro de QUE o Cortex aprendeu ouvindo.
+    """
+    candidatos_tool = extrair_candidatos(mensagens_do_turno)
+    candidatos_conversa: list[PromotionCandidate] = []
+    if extrator_conversa is not None and identidade is not None:
+        vistos = {(c.key, c.value) for c in candidatos_tool}
+        candidatos_conversa = [
+            c
+            for c in extrator_conversa.extrair(mensagens_do_turno, identidade)
+            if (c.key, c.value) not in vistos
+        ]
+
+    episodios: list[Episode] = []
+    for c in candidatos_tool:
+        episodios.append(
+            engine.observe(c.key, c.value, c.source, c.justification, domain=c.domain)
+        )
+    for c in candidatos_conversa:
+        ep = engine.observe(c.key, c.value, c.source, c.justification, domain=c.domain)
+        episodios.append(ep)
+        if audit is not None:
+            audit.registrar(
+                "aprendizado_conversa",
+                key=c.key,
+                procedencia=c.source.procedencia.value,
+                desfecho="escalado" if ep.escalated else "aceito",
+            )
+    if candidatos_conversa:
+        logger.info(
+            "aprendizado de conversa: %d candidato(s) ao observe()", len(candidatos_conversa)
         )
     if episodios:
         logger.info("promovidos %d candidato(s) à memória", len(episodios))

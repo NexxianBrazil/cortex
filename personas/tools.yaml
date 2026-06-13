@@ -110,3 +110,25 @@ tools:
         tipo: boolean
         descricao: Há cotação formal emitida que dê lastro à condição prometida?
         obrigatorio: false
+
+  - nome: gerenciar_fila
+    descricao: >-
+      Gerencia a Learning Queue (propostas de memória pendentes de aprovação).
+      Use quando o GESTOR pedir para ver, aprovar ou rejeitar pendências
+      ("o que está pendente?", "aprova a 3", "rejeita a 2"). A autoridade segue
+      o canal autenticado: se o remetente não for o gestor, a tool recusa. Para
+      aprovar/rejeitar é obrigatório o número da proposta E a razão (a decisão
+      fica registrada com o nome de quem decidiu).
+    risco_base: low
+    parametros:
+      - nome: acao
+        tipo: string
+        descricao: "listar | aprovar | rejeitar"
+      - nome: proposta_id
+        tipo: integer
+        descricao: Número da proposta (necessário para aprovar/rejeitar)
+        obrigatorio: false
+      - nome: razao
+        tipo: string
+        descricao: Motivo da decisão (obrigatório para aprovar/rejeitar)
+        obrigatorio: false

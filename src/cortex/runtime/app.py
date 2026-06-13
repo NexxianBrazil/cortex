@@ -160,6 +160,8 @@ def montar_runtime(
     lembrar de uma conversa para outra (e, com store=graphiti, entre
     execuções). O provider é compartilhado entre o loop e o LLMClassifier.
     """
+    from cortex.runtime.comandos_fila import ContextoTurno, registrar_gerenciar_fila
+    from cortex.runtime.extracao_conversa import criar_extrator_conversa
     from cortex.sor.factory import criar_gateway
     from cortex.sor.tools import registrar_tools_sor
 
@@ -177,6 +179,18 @@ def montar_runtime(
     registry = criar_registry_mock(persona.tools)
     registrar_kb(registry, config, persona)
     registrar_tools_sor(registry, gateway)
+
+    # Aprendizado conversacional (7b): extrator de fatos da conversa + a tool
+    # gerenciar_fila, que decide a Learning Queue com a autoridade do CANAL. O
+    # ContextoTurno é o canal pelo qual o loop publica a identidade do turno.
+    extrator = (
+        criar_extrator_conversa(config, provider)
+        if config.aprendizado_conversacional
+        else None
+    )
+    contexto = ContextoTurno()
+    registrar_gerenciar_fila(registry, engine, contexto, audit=audit, dominio=DOMINIO_PADRAO)
+
     loop = AgentLoop(
         provider,
         registry,
@@ -185,5 +199,7 @@ def montar_runtime(
         recall_limite=config.memoria_recall_max,
         decision=decision,
         audit=audit,
+        extrator_conversa=extrator,
+        contexto_turno=contexto,
     )
     return loop, engine

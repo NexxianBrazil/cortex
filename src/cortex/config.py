@@ -110,6 +110,16 @@ class CortexConfig(BaseSettings):
         description="Token Bearer da API do SOR (de env/.env, nunca versionado)",
     )
 
+    # --- aprendizado conversacional (Fase 7b) ---
+    aprendizado_conversacional: bool = Field(
+        default=True,
+        description="Liga a extração de fatos da conversa no fim do turno (passa pelo observe())",
+    )
+    extrator_conversa: Literal["heuristico", "llm"] = Field(
+        default="heuristico",
+        description="Extrator de fatos: 'heuristico' (CI, sem rede) ou 'llm' (exige provider real)",
+    )
+
     # --- servidor HTTP (Fase 7a) ---
     server_token: SecretStr | None = Field(
         default=None,

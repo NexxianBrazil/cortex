@@ -50,3 +50,23 @@ tools:
       - nome: cliente_id
         tipo: string
         descricao: Identificador do cliente no cadastro
+
+  - nome: gerenciar_fila
+    descricao: >-
+      Gerencia a Learning Queue (propostas de memória pendentes). Use quando o
+      GESTOR pedir para ver, aprovar ou rejeitar pendências. A autoridade segue
+      o canal autenticado: se o remetente não for o gestor, a tool recusa. Para
+      aprovar/rejeitar é obrigatório o número da proposta E a razão.
+    risco_base: low
+    parametros:
+      - nome: acao
+        tipo: string
+        descricao: "listar | aprovar | rejeitar"
+      - nome: proposta_id
+        tipo: integer
+        descricao: Número da proposta (necessário para aprovar/rejeitar)
+        obrigatorio: false
+      - nome: razao
+        tipo: string
+        descricao: Motivo da decisão (obrigatório para aprovar/rejeitar)
+        obrigatorio: false
