@@ -407,6 +407,22 @@ class MemoryEngine:
                 resulting_belief_id=None,
             )
 
+        # Proposta de REVISÃO (Fase 8): pedido de atenção da reflexão batch. NÃO
+        # propõe valor — aprovar é RECONHECER (a régua foi revista), sem mutar
+        # crença nem caducar. A decisão vira episódio com autor, como as demais.
+        if p.kind is ProposalKind.REVISAR:
+            p.status = ProposalStatus.APROVADA
+            p.decided_at = agora()
+            p.decided_by = autor
+            p.decision_reason = razao
+            return self._registrar_decisao(
+                p,
+                autor,
+                action=f"humano RECONHECEU a revisão de '{p.key}' (proposta {p.id})",
+                reason=razao,
+                resulting_belief_id=None,
+            )
+
         vigente = self.active(p.key)
         vigente_valor = vigente.value if vigente is not None else None
         if vigente_valor != p.current_value:

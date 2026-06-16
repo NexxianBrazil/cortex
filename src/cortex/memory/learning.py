@@ -50,10 +50,14 @@ class ProposalKind(StrEnum):
     MEMORIA (default, Fase 4b): uma escrita de crença que o cético escalou.
     ACAO (Fase 4c): uma CHAMADA DE TOOL bloqueada pelo Decision Engine em
     enforce; aprová-la concede uma exceção ONE-SHOT (a mesma chamada, uma vez).
+    REVISAR (Fase 8): um PEDIDO DE ATENÇÃO da reflexão batch — não propõe um
+    valor a escrever; pede que o humano REVISE a régua de uma chave em conflito
+    crônico. Aprovar = reconhecer (não muta crença); rejeitar = descartar.
     """
 
     MEMORIA = "memoria"
     ACAO = "acao"
+    REVISAR = "revisar"
 
 
 class Proposal(ModeloMemoria):

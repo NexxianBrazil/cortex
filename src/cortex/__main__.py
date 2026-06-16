@@ -8,6 +8,7 @@ chave nenhuma — provider real é decisão de config, não de código.
 import argparse
 import logging
 import sys
+import threading
 from pathlib import Path
 
 from cortex.config import CortexConfig, carregar_config
@@ -321,6 +322,9 @@ def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: i
     operador = config.painel_operador or persona.user.autoridade.gestor.nome
     painel_on = config.painel_habilitado and config.painel_senha is not None
 
+    # Lock GLOBAL compartilhado entre os turnos (servidor) e o job de reflexão
+    # (Scheduler) — a reflexão escreve no store e não pode correr com um turno.
+    lock = threading.Lock()
     app = criar_app(
         persona=persona,
         loop=loop,
@@ -334,7 +338,10 @@ def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: i
         kb=kb,
         audit=audit,
         painel_operador=operador,
+        lock=lock,
     )
+
+    scheduler = _agendar_operacoes(config, engine, lock, audit, notificador)
     host = host or config.server_host
     porta = porta or config.server_porta
     if config.painel_habilitado and not painel_on:
@@ -342,9 +349,92 @@ def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: i
     print(
         f"Cortex {persona.soul.nome} ({persona.soul.papel}) ouvindo em "
         f"http://{host}:{porta}  [deploy={deploy_dir} | {len(mapa)} canal(is) mapeado(s) | "
-        f"saída={config.canal_saida}{' | painel em /painel' if painel_on else ''}]"
+        f"saída={config.canal_saida}{' | painel em /painel' if painel_on else ''}"
+        f"{f' | reflexão {config.reflexao_horario}' if scheduler else ''}]"
     )
     uvicorn.run(app, host=host, port=porta, log_level="info")
+    return 0
+
+
+def _agendar_operacoes(config: CortexConfig, engine, lock, audit, notificador):
+    """Registra a reflexão batch + heartbeat no Scheduler (Fase 8). None se off."""
+    if not config.reflexao_habilitada:
+        return None
+    from cortex.ops import Heartbeat, Scheduler
+    from cortex.reflection.servico import criar_job_reflexao
+
+    scheduler = Scheduler()
+    scheduler.agendar_diario(
+        config.reflexao_horario,
+        criar_job_reflexao(
+            engine.store, config.reflexao_janela_dias, lock, audit=audit, notificador=notificador
+        ),
+        nome="reflexao",
+    )
+
+    db_path = config.kuzu_db_path if config.store == "graphiti" else None
+    hb = Heartbeat(db_path=db_path, pendentes=lambda: len(engine.pending_approvals))
+
+    def _checar_saude() -> None:
+        m = hb.coletar()
+        if m["status"] != "ok":
+            logging.getLogger("cortex.ops").warning(
+                "heartbeat %s — disco_livre=%s%% banco=%s",
+                m["status"].upper(),
+                m["disco_livre_pct"],
+                m["banco_bytes"],
+            )
+
+    scheduler.agendar_intervalo(15, _checar_saude, nome="heartbeat")
+    scheduler.iniciar()
+    return scheduler
+
+
+def _refletir(config: CortexConfig, janela_dias: int | None, dry_run: bool) -> int:
+    """Roda a reflexão batch SOB DEMANDA (revê o dia na hora). `--dry-run` não grava."""
+    from cortex.reflection.servico import executar_reflexao
+
+    persona = carregar_persona(config.personas_dir)
+    engine = montar_engine(config, authority_map=autoridade_da_persona(persona))
+    audit = AuditTrail(config.audit_path) if config.audit else None
+    janela = janela_dias or config.reflexao_janela_dias
+    relatorio, criadas = executar_reflexao(engine.store, janela, audit=audit, dry_run=dry_run)
+
+    print(
+        f"Reflexão (janela {relatorio.janela_dias}d): {relatorio.episodios_lidos} episódio(s) "
+        f"lido(s); detectores={relatorio.por_detector}"
+    )
+    for pr in relatorio.propostas:
+        marca = "[dry-run] " if dry_run else ""
+        print(
+            f"  {marca}{pr.detector}: {pr.key} → {pr.proposed_value} "
+            f"(saliência {pr.saliencia:.0f}, {pr.kind.value})"
+        )
+    if dry_run:
+        print("dry-run: nada gravado.")
+    else:
+        print(f"{len(criadas)} proposta(s) entraram na fila.")
+    return 0
+
+
+def _saude(config: CortexConfig) -> int:
+    """Snapshot de saúde local do Cortex (heartbeat na CLI)."""
+    from cortex.ops import Heartbeat
+
+    persona = carregar_persona(config.personas_dir)
+    engine = montar_engine(config, authority_map=autoridade_da_persona(persona))
+    db_path = config.kuzu_db_path if config.store == "graphiti" else None
+    hb = Heartbeat(db_path=db_path, pendentes=lambda: len(engine.pending_approvals))
+    m = hb.coletar()
+    print(f"Saúde do Cortex: {m['status'].upper()}")
+    print(
+        f"  disco livre: {m['disco_livre_pct']}% | cpu(1m): {m['cpu_load_1min']} | "
+        f"ram: {m['memoria_uso_pct']}%"
+    )
+    print(
+        f"  banco: {m['banco_bytes']} bytes | pendentes: {m['propostas_pendentes']} | "
+        f"sessões: {m['sessoes_ativas']}"
+    )
     return 0
 
 
@@ -402,6 +492,18 @@ def main(argv: list[str] | None = None) -> int:
     servir.add_argument(
         "--porta", type=int, default=None, help="porta de escuta (default da config)"
     )
+
+    refletir = subparsers.add_parser(
+        "refletir", parents=[comum], help="reflexão batch sob demanda (revê o dia)"
+    )
+    refletir.add_argument(
+        "--janela-dias", type=int, default=None, help="dias de episódios a revisar"
+    )
+    refletir.add_argument(
+        "--dry-run", action="store_true", help="mostra o que proporia, sem gravar"
+    )
+
+    subparsers.add_parser("saude", parents=[comum], help="saúde local do Cortex (heartbeat)")
 
     whatsapp = subparsers.add_parser(
         "whatsapp", parents=[comum], help="utilitários do canal WhatsApp (Evolution)"
@@ -491,6 +593,10 @@ def main(argv: list[str] | None = None) -> int:
         return _chat(config, identidade)
     if args.comando == "servir":
         return _servir(config, deploy, args.host, args.porta)
+    if args.comando == "refletir":
+        return _refletir(config, args.janela_dias, args.dry_run)
+    if args.comando == "saude":
+        return _saude(config)
     if args.comando == "whatsapp":
         return _whatsapp_testar(config, args.para, args.texto)
     if args.comando == "fila":

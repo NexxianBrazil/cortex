@@ -15,7 +15,7 @@ import re
 import secrets
 import threading
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
@@ -82,6 +82,7 @@ def criar_app(
     kb=None,
     audit=None,
     painel_operador: str | None = None,
+    lock=None,
 ) -> FastAPI:
     """Monta o app FastAPI sobre um runtime já montado (testável com StubProvider).
 
@@ -89,10 +90,23 @@ def criar_app(
     como na 7a (sem notificação nem webhook útil) — é o que os testes da 7a usam.
     O painel (7d) só é montado com `config` habilitado + senha + engine/kb/operador.
     """
-    app = FastAPI(title=f"Cortex — {persona.soul.nome}", version="7d")
+    app = FastAPI(title=f"Cortex — {persona.soul.nome}", version="8")
     gerenciador = GerenciadorSessoes(persona, ttl_minutos, agora=agora)
-    lock = threading.Lock()
-    contadores = {"turnos": 0}
+    # Lock GLOBAL do deploy: serializa turnos E o job de reflexão (Fase 8). Pode
+    # ser injetado por `cortex servir` para compartilhar com o Scheduler.
+    lock = lock or threading.Lock()
+    contadores: dict = {"turnos": 0, "ultimo_turno": None}
+
+    # Heartbeat (Fase 8): saúde LOCAL exposta em /v1/saude, lendo contadores vivos.
+    from cortex.ops import Heartbeat
+
+    db_path = config.kuzu_db_path if config is not None and config.store == "graphiti" else None
+    heartbeat = Heartbeat(
+        db_path=db_path,
+        sessoes_ativas=lambda: gerenciador.ativas,
+        pendentes=lambda: len(engine.pending_approvals) if engine is not None else 0,
+        ultimo_turno=lambda: contadores["ultimo_turno"],
+    )
 
     def _conferir_token(recebido: str | None) -> None:
         # Autentica o TRANSPORTE (o bridge/Evolution), não o remetente. Sem token
@@ -116,6 +130,7 @@ def criar_app(
             except LoopLimiteExcedidoError as exc:
                 raise HTTPException(status_code=503, detail=f"turno abortado: {exc}") from exc
             contadores["turnos"] += 1
+            contadores["ultimo_turno"] = datetime.now(UTC)
             novas = (
                 [p for p in engine.pending_approvals if p.id not in pend_antes]
                 if engine is not None
@@ -171,6 +186,7 @@ def criar_app(
             "canal_saida": canal_saida.nome_canal if canal_saida is not None else None,
             "sessoes_ativas": gerenciador.ativas,
             "turnos_atendidos": contadores["turnos"],
+            "heartbeat": heartbeat.coletar(),
         }
 
     # Painel do operador (7d): mesma porta, auth separada. Fail-safe: sem senha

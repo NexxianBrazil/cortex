@@ -157,6 +157,17 @@ class CortexConfig(BaseSettings):
         description="Notifica o gestor pelo canal quando entra proposta nova na Learning Queue",
     )
 
+    # --- reflexão batch (Fase 8) ---
+    reflexao_habilitada: bool = Field(
+        default=True, description="Agenda a reflexão batch ('revisar o dia') no `cortex servir`"
+    )
+    reflexao_horario: str = Field(
+        default="03:00", description="Horário diário (HH:MM) da reflexão batch"
+    )
+    reflexao_janela_dias: int = Field(
+        default=1, ge=1, description="Janela (dias) de episódios que a reflexão revê"
+    )
+
     # --- painel HTML de operação (Fase 7d) ---
     painel_habilitado: bool = Field(
         default=True, description="Liga o painel HTML do operador (na mesma porta do servidor)"
