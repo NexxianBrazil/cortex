@@ -283,6 +283,8 @@ def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: i
     """Sobe o gateway HTTP do deploy (FastAPI/uvicorn) com canal de saída e notificação."""
     import uvicorn
 
+    from cortex.governance import AuditTrail
+    from cortex.knowledge import KnowledgeBase, criar_embedder
     from cortex.runtime.notificacao import NotificadorFila
     from cortex.server import (
         canal_id_do_gestor,
@@ -313,6 +315,12 @@ def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: i
                 "[cortex] aviso: gestor não mapeado no canais.yaml — não notificarei a fila."
             )
 
+    # Painel do operador (7d): KB + audit do deploy; operador = config ou gestor.
+    kb = KnowledgeBase(config.kb_path, criar_embedder(config))
+    audit = AuditTrail(config.audit_path) if config.audit else None
+    operador = config.painel_operador or persona.user.autoridade.gestor.nome
+    painel_on = config.painel_habilitado and config.painel_senha is not None
+
     app = criar_app(
         persona=persona,
         loop=loop,
@@ -322,13 +330,19 @@ def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: i
         engine=engine,
         canal_saida=canal,
         notificador=notificador,
+        config=config,
+        kb=kb,
+        audit=audit,
+        painel_operador=operador,
     )
     host = host or config.server_host
     porta = porta or config.server_porta
+    if config.painel_habilitado and not painel_on:
+        print("[cortex] aviso: painel habilitado mas sem painel_senha — desligado (fail-safe).")
     print(
         f"Cortex {persona.soul.nome} ({persona.soul.papel}) ouvindo em "
         f"http://{host}:{porta}  [deploy={deploy_dir} | {len(mapa)} canal(is) mapeado(s) | "
-        f"saída={config.canal_saida}]"
+        f"saída={config.canal_saida}{' | painel em /painel' if painel_on else ''}]"
     )
     uvicorn.run(app, host=host, port=porta, log_level="info")
     return 0

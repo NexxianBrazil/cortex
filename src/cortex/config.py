@@ -157,6 +157,22 @@ class CortexConfig(BaseSettings):
         description="Notifica o gestor pelo canal quando entra proposta nova na Learning Queue",
     )
 
+    # --- painel HTML de operação (Fase 7d) ---
+    painel_habilitado: bool = Field(
+        default=True, description="Liga o painel HTML do operador (na mesma porta do servidor)"
+    )
+    painel_senha: SecretStr | None = Field(
+        default=None,
+        description="Senha do operador no painel (de env/.env). Sem senha, o painel NÃO sobe",
+    )
+    painel_operador: str | None = Field(
+        default=None,
+        description="Nome do operador do painel (autor das decisões); None usa o gestor do USER.md",
+    )
+    painel_sessao_horas: int = Field(
+        default=8, ge=1, description="Validade (h) do cookie de sessão do painel"
+    )
+
     # --- guardrails do loop ---
     max_iteracoes: int = Field(
         default=10, ge=1, description="Teto de voltas do loop por turno (guardrail de custo)"

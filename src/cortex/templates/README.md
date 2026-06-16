@@ -43,6 +43,24 @@ on-prem) faz a plumbing e fala com a porta HTTP do Cortex.
 > use apenas em TESTE. Em produção, o cliente usa a **Cloud API oficial da
 > Meta**, que entra pela MESMA interface de canal de saída (sem tocar o Cortex).
 
+## Acessando o painel
+
+`cortex servir --deploy .` sobe também o **painel do operador** em
+`http://127.0.0.1:8420/painel`. Entre com a `painel_senha` do `cortex.toml`.
+
+No painel você pode: ver o **resumo**, operar a **Fila** de aprendizado
+(aprovar/rejeitar com justificativa — a decisão vira episódio com o seu nome),
+inspecionar a **Memória** (somente leitura, com o histórico bi-temporal de cada
+crença), **curar a KB** (upload de `.md` + reindexar) e ler o **Audit**.
+
+O painel é de **alocação**: ele PROPÕE e APROVA, mas **não edita o SOUL nem
+escreve crença direto** — a formação é da Nexxian (Git) e toda escrita de
+memória passa pelo motor governado. Sem `painel_senha`, o painel não sobe
+(fail-safe) e só a API de bridge funciona.
+
+> ⚠ O painel tem senha, mas **exposição pública exige TLS** na frente (proxy
+> reverso) — o painel sobe em loopback por padrão.
+
 ## Segurança
 
 - `cortex.toml` contém o `server_token` deste deploy — **não versione** este

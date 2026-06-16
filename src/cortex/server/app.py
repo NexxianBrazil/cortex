@@ -78,13 +78,18 @@ def criar_app(
     engine=None,
     canal_saida: CanalSaida | None = None,
     notificador=None,
+    config=None,
+    kb=None,
+    audit=None,
+    painel_operador: str | None = None,
 ) -> FastAPI:
     """Monta o app FastAPI sobre um runtime já montado (testável com StubProvider).
 
     `engine`/`notificador`/`canal_saida` são opcionais: sem eles o app funciona
     como na 7a (sem notificação nem webhook útil) — é o que os testes da 7a usam.
+    O painel (7d) só é montado com `config` habilitado + senha + engine/kb/operador.
     """
-    app = FastAPI(title=f"Cortex — {persona.soul.nome}", version="7c")
+    app = FastAPI(title=f"Cortex — {persona.soul.nome}", version="7d")
     gerenciador = GerenciadorSessoes(persona, ttl_minutos, agora=agora)
     lock = threading.Lock()
     contadores = {"turnos": 0}
@@ -167,5 +172,30 @@ def criar_app(
             "sessoes_ativas": gerenciador.ativas,
             "turnos_atendidos": contadores["turnos"],
         }
+
+    # Painel do operador (7d): mesma porta, auth separada. Fail-safe: sem senha
+    # (ou sem engine/kb/operador), o painel NÃO sobe — a API de bridge segue.
+    if config is not None and config.painel_habilitado:
+        senha = config.painel_senha.get_secret_value() if config.painel_senha else None
+        if senha and engine is not None and kb is not None and painel_operador:
+            from cortex.server.painel import montar_painel
+
+            montar_painel(
+                app,
+                persona=persona,
+                engine=engine,
+                kb=kb,
+                kb_path=config.kb_path,
+                audit=audit,
+                lock=lock,
+                senha=senha,
+                operador=painel_operador,
+                sessao_horas=config.painel_sessao_horas,
+            )
+            logger.info("painel do operador em /painel (operador=%s)", painel_operador)
+        else:
+            logger.warning(
+                "painel habilitado mas falta senha/engine/kb/operador — NÃO montado (fail-safe)"
+            )
 
     return app

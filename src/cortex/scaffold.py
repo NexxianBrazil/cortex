@@ -45,12 +45,13 @@ def gerar_deploy(
     gestor: str,
     dominio: str = "geral",
     token: str | None = None,
+    painel_senha: str | None = None,
 ) -> Path:
     """Cria o deploy em `destino` e o valida. Devolve o caminho do deploy.
 
-    `token=None` gera um token de bridge novo (`secrets.token_urlsafe`); o
-    parâmetro existe para testes determinísticos. Destino inexistente é criado;
-    destino com conteúdo é recusado (não sobrescrevemos um Cortex existente).
+    `token`/`painel_senha=None` geram segredos novos (`secrets.token_urlsafe`);
+    os parâmetros existem para testes determinísticos. Destino inexistente é
+    criado; destino com conteúdo é recusado (não sobrescrevemos um Cortex).
     """
     destino = Path(destino)
     if destino.exists() and any(destino.iterdir()):
@@ -64,6 +65,7 @@ def gerar_deploy(
         "gestor": gestor,
         "dominio": dominio,
         "token": token or secrets.token_urlsafe(32),
+        "painel_senha": painel_senha or secrets.token_urlsafe(18),
     }
 
     for destino_rel, template_rel in _MAPA_ARQUIVOS.items():

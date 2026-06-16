@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cortex — Painel de operação</title>
+  <link rel="stylesheet" href="/painel/static/app.css" />
+</head>
+<body>
+  <!-- Login -->
+  <div id="login" class="login hidden">
+    <form id="login-form" class="card">
+      <h1>Cortex</h1>
+      <p class="muted">Painel de operação</p>
+      <input id="senha" type="password" placeholder="senha do operador" autocomplete="current-password" />
+      <button type="submit">Entrar</button>
+      <p id="login-erro" class="erro"></p>
+    </form>
+  </div>
+
+  <!-- App -->
+  <div id="app" class="hidden">
+    <header>
+      <div class="marca">Cortex <span id="persona" class="muted"></span></div>
+      <nav>
+        <a href="#resumo">Resumo</a>
+        <a href="#fila">Fila</a>
+        <a href="#memoria">Memória</a>
+        <a href="#kb">Conhecimento</a>
+        <a href="#audit">Audit</a>
+      </nav>
+      <button id="sair" class="link">sair</button>
+    </header>
+    <main id="conteudo"></main>
+    <footer>
+      Painel de <strong>alocação</strong> — SOUL e formação não são editáveis aqui
+      (a formação é da Nexxian, via Git/Control Plane). Operador: <span id="operador"></span>.
+    </footer>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/painel/static/app.js"></script>
+</body>
+</html>

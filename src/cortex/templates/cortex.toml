@@ -24,3 +24,10 @@ server_token = "$token"
 server_host = "127.0.0.1"
 server_porta = 8420
 session_ttl_minutos = 30
+
+# Painel HTML do operador (cortex servir → /painel). A senha é deste deploy
+# (não versione este diretório). O operador é o AUTOR das decisões tomadas no
+# painel — precisa existir no USER.md e ser autoritativo (default: o gestor).
+painel_habilitado = true
+painel_senha = "$painel_senha"
+painel_operador = "$gestor"
