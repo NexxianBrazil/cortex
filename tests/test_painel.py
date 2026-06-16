@@ -32,7 +32,6 @@ from cortex.server import criar_app
 
 PERSONAS_DIR = Path(__file__).resolve().parent.parent / "personas"
 SENHA = "s3nha-do-painel"
-ESCRITA = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 @pytest.fixture(scope="module")
@@ -135,26 +134,29 @@ def test_aprovar_com_razao_vira_decisao_do_operador(persona, tmp_path):
 
 
 def test_fronteira_nenhuma_rota_escreve_crenca_nem_toca_soul(persona, tmp_path):
-    """Teste-assinatura: o painel não tem porta dos fundos para escrever verdade."""
+    """Teste-assinatura: o painel não tem porta dos fundos para escrever verdade.
+
+    Inspeciona a superfície CANÔNICA de rotas (app.openapi) — estável entre
+    versões de fastapi/starlette, ao contrário dos atributos internos de Route.
+    """
     app = _app(persona, _engine_com_proposta_externa(), tmp_path)
-    for route in app.routes:
-        path = getattr(route, "path", "").lower()
-        metodos = getattr(route, "methods", set()) or set()
-        # NENHUMA rota toca o SOUL (formação é da Nexxian, via Git).
+    caminhos = app.openapi()["paths"]
+    escreve = {"post", "put", "patch", "delete"}
+
+    for caminho, operacoes in caminhos.items():
+        path = caminho.lower()
+        metodos_escrita = escreve & {m.lower() for m in operacoes}
+        # NENHUMA rota toca o SOUL (formação é da Nexxian, via Git/Control Plane).
         assert "soul" not in path
         # NENHUMA rota de ESCRITA mexe em crença/memória diretamente.
-        if metodos & ESCRITA:
-            assert "belief" not in path and "crenca" not in path, path
-            assert "/memoria" not in path, path  # memória é só leitura (GET)
+        if metodos_escrita:
+            assert "belief" not in path and "crenca" not in path, caminho
+            assert "/memoria" not in path, caminho  # memória é só leitura (GET)
 
     # A ÚNICA escrita de memória existente é via aprovar/rejeitar (motor governado).
-    escrita_fila = [
-        r.path
-        for r in app.routes
-        if (getattr(r, "methods", set()) or set()) & ESCRITA and "/fila/" in r.path
-    ]
-    assert any("aprovar" in p for p in escrita_fila)
-    assert any("rejeitar" in p for p in escrita_fila)
+    escrita = [p for p, ops in caminhos.items() if escreve & {m.lower() for m in ops}]
+    assert any("aprovar" in p for p in escrita)
+    assert any("rejeitar" in p for p in escrita)
 
 
 def test_kb_upload_valido_indexa_e_invalido_explica(persona, tmp_path):
