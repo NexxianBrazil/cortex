@@ -16,6 +16,33 @@ KB, memória e auditoria. Gestor: **$gestor**.
 5. **Plugar o bridge** — um bridge (n8n/Evolution/Cloud API) chama
    `POST /v1/mensagens` com o header `X-Cortex-Token` (veja `cortex.toml`).
 
+## Ligando o WhatsApp (Evolution API)
+
+O Cortex não embute o protocolo do WhatsApp — uma **Evolution API** (Baileys,
+on-prem) faz a plumbing e fala com a porta HTTP do Cortex.
+
+1. **Suba a Evolution API** (Docker, na mesma rede do Cortex) e **crie uma
+   instância**; pareie o número lendo o **QR Code**.
+2. **Aponte o webhook** da instância para
+   `http://<host-do-cortex>:8420/v1/webhook/evolution` (evento
+   `messages.upsert`), enviando o header `apikey` com o `server_token` do
+   `cortex.toml`.
+3. **Configure o `cortex.toml`** deste deploy:
+   ```toml
+   canal_saida = "evolution"
+   evolution_base_url = "http://localhost:8080"
+   evolution_instancia = "<nome-da-instancia>"
+   ```
+   A `evolution_api_key` vem do ambiente/.env (`CORTEX_EVOLUTION_API_KEY`), nunca
+   versionada.
+4. **Mapeie o número** no `canais.yaml` (telefone com DDI, só dígitos → pessoa
+   do USER.md). O gestor mapeado recebe as notificações da fila.
+5. **Teste**: `cortex whatsapp testar --deploy . --para 5511999990000 --texto "oi"`.
+
+> ⚠ **Aviso:** número de WhatsApp não-oficial (Baileys) **pode ser banido** —
+> use apenas em TESTE. Em produção, o cliente usa a **Cloud API oficial da
+> Meta**, que entra pela MESMA interface de canal de saída (sem tocar o Cortex).
+
 ## Segurança
 
 - `cortex.toml` contém o `server_token` deste deploy — **não versione** este

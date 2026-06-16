@@ -138,6 +138,25 @@ class CortexConfig(BaseSettings):
         description="Inatividade (min) após a qual a próxima mensagem do contato abre Session nova",
     )
 
+    # --- canal de saída / WhatsApp (Fase 7c) ---
+    canal_saida: Literal["log", "evolution"] = Field(
+        default="log",
+        description="Canal de SAÍDA: 'log' (CI/dev, sem rede) ou 'evolution' (WhatsApp on-prem)",
+    )
+    evolution_base_url: str | None = Field(
+        default=None, description="URL base da Evolution API (ex.: http://localhost:8080)"
+    )
+    evolution_instancia: str | None = Field(
+        default=None, description="Nome da instância da Evolution (o número pareado)"
+    )
+    evolution_api_key: SecretStr | None = Field(
+        default=None, description="API key da Evolution (de env/.env, nunca versionada)"
+    )
+    notificar_gestor: bool = Field(
+        default=True,
+        description="Notifica o gestor pelo canal quando entra proposta nova na Learning Queue",
+    )
+
     # --- guardrails do loop ---
     max_iteracoes: int = Field(
         default=10, ge=1, description="Teto de voltas do loop por turno (guardrail de custo)"

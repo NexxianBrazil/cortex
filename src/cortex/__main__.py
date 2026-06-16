@@ -280,13 +280,19 @@ def _novo(args) -> int:
 
 
 def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: int | None) -> int:
-    """Sobe o gateway HTTP do deploy (FastAPI/uvicorn)."""
+    """Sobe o gateway HTTP do deploy (FastAPI/uvicorn) com canal de saída e notificação."""
     import uvicorn
 
-    from cortex.server import carregar_mapa_identidades, criar_app
+    from cortex.runtime.notificacao import NotificadorFila
+    from cortex.server import (
+        canal_id_do_gestor,
+        carregar_mapa_identidades,
+        criar_app,
+        criar_canal_saida,
+    )
 
     persona = carregar_persona(config.personas_dir)
-    loop, _engine = montar_runtime(config, persona)
+    loop, engine = montar_runtime(config, persona)
     deploy_dir = Path(deploy) if deploy else Path.cwd()
     mapa = carregar_mapa_identidades(deploy_dir / "canais.yaml", persona)
     token = config.server_token.get_secret_value() if config.server_token else None
@@ -295,20 +301,50 @@ def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: i
             "[cortex] aviso: sem server_token na config — o gateway recusará tudo (401). "
             "Gere um deploy com `cortex novo` ou defina server_token no cortex.toml."
         )
+
+    # Canal de SAÍDA (7c): 'log' por default (offline); 'evolution' fala WhatsApp.
+    canal = criar_canal_saida(config)
+    notificador = None
+    if config.notificar_gestor:
+        gestor_id = canal_id_do_gestor(mapa, persona, canal.nome_canal)
+        notificador = NotificadorFila(canal, gestor_id)
+        if gestor_id is None:
+            print(
+                "[cortex] aviso: gestor não mapeado no canais.yaml — não notificarei a fila."
+            )
+
     app = criar_app(
         persona=persona,
         loop=loop,
         mapa_identidades=mapa,
         token=token,
         ttl_minutos=config.session_ttl_minutos,
+        engine=engine,
+        canal_saida=canal,
+        notificador=notificador,
     )
     host = host or config.server_host
     porta = porta or config.server_porta
     print(
         f"Cortex {persona.soul.nome} ({persona.soul.papel}) ouvindo em "
-        f"http://{host}:{porta}  [deploy={deploy_dir} | {len(mapa)} canal(is) mapeado(s)]"
+        f"http://{host}:{porta}  [deploy={deploy_dir} | {len(mapa)} canal(is) mapeado(s) | "
+        f"saída={config.canal_saida}]"
     )
     uvicorn.run(app, host=host, port=porta, log_level="info")
+    return 0
+
+
+def _whatsapp_testar(config: CortexConfig, para: str, texto: str) -> int:
+    """Smoke test do operador: envia uma mensagem pelo canal de saída configurado."""
+    from cortex.server import CanalSaidaError, criar_canal_saida
+
+    canal = criar_canal_saida(config)
+    try:
+        canal.enviar(para, texto)
+    except CanalSaidaError as exc:
+        print(f"[cortex] falha ao enviar (canal={config.canal_saida}): {exc}")
+        return 1
+    print(f"[cortex] enviado para {para} via canal '{config.canal_saida}'.")
     return 0
 
 
@@ -318,9 +354,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # --deploy: carrega o cortex.toml de um deploy auto-contido (Fase 7a). Sem
     # ele, usa o CWD (o repo é o deploy de desenvolvimento da Mariana).
+    # --deploy via SUPPRESS: pode aparecer em qualquer nível (antes ou depois do
+    # subcomando) sem que o parser de um nível sobrescreva o valor do outro.
     comum = argparse.ArgumentParser(add_help=False)
     comum.add_argument(
-        "--deploy", default=None, metavar="DIR", help="diretório do deploy (cortex.toml)"
+        "--deploy",
+        default=argparse.SUPPRESS,
+        metavar="DIR",
+        help="diretório do deploy (cortex.toml)",
     )
 
     chat = subparsers.add_parser(
@@ -348,12 +389,22 @@ def main(argv: list[str] | None = None) -> int:
         "--porta", type=int, default=None, help="porta de escuta (default da config)"
     )
 
+    whatsapp = subparsers.add_parser(
+        "whatsapp", parents=[comum], help="utilitários do canal WhatsApp (Evolution)"
+    )
+    whatsapp_sub = whatsapp.add_subparsers(dest="acao", required=True)
+    wpp_testar = whatsapp_sub.add_parser(
+        "testar", parents=[comum], help="envia uma mensagem pelo canal de saída"
+    )
+    wpp_testar.add_argument("--para", required=True, help="número de destino (com DDI, só dígitos)")
+    wpp_testar.add_argument("--texto", required=True, help="texto a enviar")
+
     fila = subparsers.add_parser(
         "fila", parents=[comum], help="Learning Queue: lista/aprova/rejeita propostas"
     )
     fila_sub = fila.add_subparsers(dest="acao")  # sem ação = listar
     for nome in ("aprovar", "rejeitar"):
-        sp = fila_sub.add_parser(nome, help=f"{nome} uma proposta pendente")
+        sp = fila_sub.add_parser(nome, parents=[comum], help=f"{nome} uma proposta pendente")
         sp.add_argument("id", type=int, help="id da proposta")
         sp.add_argument(
             "--autor", required=True, help="nome de quem decide (deve ser autoritativo)"
@@ -364,8 +415,12 @@ def main(argv: list[str] | None = None) -> int:
         "kb", parents=[comum], help="Knowledge Base: (re)indexa e consulta a KB curada"
     )
     kb_sub = kb.add_subparsers(dest="acao", required=True)
-    kb_sub.add_parser("indexar", help="(re)indexa a KB inteira — ato deliberado do curador")
-    kb_buscar = kb_sub.add_parser("buscar", help="consulta a KB (debug do curador)")
+    kb_sub.add_parser(
+        "indexar", parents=[comum], help="(re)indexa a KB inteira — ato deliberado do curador"
+    )
+    kb_buscar = kb_sub.add_parser(
+        "buscar", parents=[comum], help="consulta a KB (debug do curador)"
+    )
     kb_buscar.add_argument("pergunta", help="pergunta em linguagem natural")
     kb_buscar.add_argument("--dominio", default=None, help="filtra por domínio (ex.: comercial)")
     kb_buscar.add_argument(
@@ -378,9 +433,13 @@ def main(argv: list[str] | None = None) -> int:
         "sor", parents=[comum], help="System of Record: consulta dado vivo (preço/cliente)"
     )
     sor_sub = sor.add_subparsers(dest="acao", required=True)
-    sor_preco = sor_sub.add_parser("preco", help="consulta o preço vivo de um produto")
+    sor_preco = sor_sub.add_parser(
+        "preco", parents=[comum], help="consulta o preço vivo de um produto"
+    )
     sor_preco.add_argument("codigo", help="código do produto (ex.: PRD-001)")
-    sor_cliente = sor_sub.add_parser("cliente", help="consulta o cadastro vivo de um cliente")
+    sor_cliente = sor_sub.add_parser(
+        "cliente", parents=[comum], help="consulta o cadastro vivo de um cliente"
+    )
     sor_cliente.add_argument("cliente_id", help="identificador do cliente (ex.: CLI-001)")
 
     audit_p = subparsers.add_parser(
@@ -401,8 +460,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.comando == "novo":
         return _novo(args)
 
+    deploy = getattr(args, "deploy", None)  # SUPPRESS: ausente quando não passado
     try:
-        config = carregar_config(args.deploy)
+        config = carregar_config(deploy)
     except (FileNotFoundError, OSError) as exc:
         print(f"[cortex] não consegui carregar o deploy: {exc}")
         return 1
@@ -416,7 +476,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return _chat(config, identidade)
     if args.comando == "servir":
-        return _servir(config, args.deploy, args.host, args.porta)
+        return _servir(config, deploy, args.host, args.porta)
+    if args.comando == "whatsapp":
+        return _whatsapp_testar(config, args.para, args.texto)
     if args.comando == "fila":
         if args.acao in ("aprovar", "rejeitar"):
             return _fila_decidir(config, args.acao, args.id, args.autor, args.razao)

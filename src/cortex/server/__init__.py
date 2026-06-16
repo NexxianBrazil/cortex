@@ -7,8 +7,16 @@ thread-safe) e responde. A 7c pluga o WhatsApp real por trás deste endpoint.
 """
 
 from cortex.server.app import MensagemEntrada, MensagemResposta, criar_app
+from cortex.server.canal_saida import (
+    CanalSaida,
+    CanalSaidaError,
+    EvolutionCanalSaida,
+    LogCanalSaida,
+    criar_canal_saida,
+)
 from cortex.server.identidade import (
     CanaisError,
+    canal_id_do_gestor,
     carregar_mapa_identidades,
     resolver_identidade,
 )
@@ -16,10 +24,16 @@ from cortex.server.sessoes import GerenciadorSessoes
 
 __all__ = [
     "CanaisError",
+    "CanalSaida",
+    "CanalSaidaError",
+    "EvolutionCanalSaida",
     "GerenciadorSessoes",
+    "LogCanalSaida",
     "MensagemEntrada",
     "MensagemResposta",
+    "canal_id_do_gestor",
     "carregar_mapa_identidades",
     "criar_app",
+    "criar_canal_saida",
     "resolver_identidade",
 ]

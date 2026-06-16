@@ -85,7 +85,13 @@ class KnowledgeBase:
     def _arquivos_md(self) -> list[Path]:
         if not self._path.is_dir():
             return []
-        return sorted(p for p in self._path.glob("*.md") if p.name != NOME_INDICE)
+        # README.md é doc do curador (gerado pelo scaffold), não conteúdo da KB —
+        # não tem frontmatter e não deve ser indexado nem acusar erro de curadoria.
+        return sorted(
+            p
+            for p in self._path.glob("*.md")
+            if p.name != NOME_INDICE and p.name.lower() != "readme.md"
+        )
 
     def indexar(self) -> dict:
         """Varre o diretório, parseia, chunka, embeda e grava o índice (do zero).

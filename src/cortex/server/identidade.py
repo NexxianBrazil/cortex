@@ -71,3 +71,19 @@ def resolver_identidade(
     if pessoa is None:
         return identidade_externa(canal, canal_id)
     return identidade_interna(persona, pessoa, canal=canal, canal_id=canal_id)
+
+
+def canal_id_do_gestor(
+    mapa: dict[ChaveCanal, str], persona: Persona, canal: str
+) -> str | None:
+    """O canal_id (telefone/endereço) do GESTOR neste canal, a partir do mapa.
+
+    Base da notificação da Learning Queue (7c): para quem o Cortex avisa quando
+    entra proposta nova. None se o gestor não está mapeado no canal — quem
+    chama loga e segue sem notificar.
+    """
+    gestor = persona.user.autoridade.gestor.nome
+    for (c, canal_id), pessoa in mapa.items():
+        if c == canal and pessoa == gestor:
+            return canal_id
+    return None
