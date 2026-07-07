@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cortex — Criador Visual</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <span class="marca">Cortex<span class="marca-sub"> · Criador Visual</span></span>
+    <nav>
+      <a href="#inicio" data-tela="inicio" class="ativo">Início</a>
+      <a href="#criar" data-tela="criar">Criar um Cortex</a>
+      <a href="#meus" data-tela="meus">Meus Cortexes</a>
+    </nav>
+    <span class="muted" id="base-dir"></span>
+  </header>
+
+  <div class="fronteira">
+    Aqui você <strong>cria e configura</strong> o Cortex (alocação: nome, função, gestor,
+    canais, KB). O caráter/formação vem da Nexxian e <strong>não se edita aqui</strong> —
+    a operação da verdade (fila, memória) vive no painel de operação de cada Cortex.
+  </div>
+
+  <main>
+    <!-- ============================ INÍCIO ============================ -->
+    <section id="tela-inicio">
+      <h1>Bem-vindo</h1>
+      <p class="intro">
+        Um <strong>Cortex</strong> é um profissional digital: você dá a ele um nome, uma
+        função e um gestor humano — e ele nasce pronto para ser alocado na sua operação.
+        Antes de criar o primeiro, confira se o ambiente está pronto:
+      </p>
+      <div id="diagnostico" class="lista-diag"><p class="muted">Verificando o ambiente…</p></div>
+      <div id="diag-resumo"></div>
+    </section>
+
+    <!-- ============================ CRIAR ============================= -->
+    <section id="tela-criar" class="hidden">
+      <h1>Criar um Cortex</h1>
+      <form id="form-criar" class="form-criar" autocomplete="off">
+        <div class="grid2">
+          <label>Nome da persona *
+            <input name="nome" placeholder="ex.: Rafael" required>
+          </label>
+          <label>Função / área *
+            <input name="funcao" placeholder="ex.: suporte técnico" required>
+          </label>
+          <label>Gestor (quem manda) *
+            <input name="gestor" placeholder="ex.: Denilson Medeiros" required>
+          </label>
+          <label>Domínio operacional
+            <input name="dominio" placeholder="geral" value="geral">
+          </label>
+        </div>
+        <label>Pasta do deploy <span class="muted">(dentro do diretório de deploys)</span>
+          <input name="destino" placeholder="deixe vazio para usar o nome">
+        </label>
+
+        <h2>Cérebro (provider)</h2>
+        <div class="providers" id="providers">
+          <label class="provider">
+            <input type="radio" name="provider" value="stub" checked>
+            <span class="titulo">Teste</span>
+            <span class="desc">Offline e sem custo. Respostas simuladas — perfeito para
+              experimentar o fluxo antes de plugar um cérebro real.</span>
+          </label>
+          <label class="provider">
+            <input type="radio" name="provider" value="claude">
+            <span class="titulo">Claude (API)</span>
+            <span class="desc">O cérebro completo, com ferramentas. Precisa de uma chave
+              de API da Anthropic (paga por uso).</span>
+          </label>
+          <label class="provider">
+            <input type="radio" name="provider" value="openai">
+            <span class="titulo">Local / Ollama</span>
+            <span class="desc">Soberania total: um modelo rodando na sua máquina
+              (Ollama) ou qualquer API compatível com OpenAI.</span>
+          </label>
+        </div>
+        <div id="campo-chave" class="hidden">
+          <label>Chave de API <span class="muted">(vai para o .env do deploy, nunca é versionada)</span>
+            <input name="api_key" type="password" placeholder="sk-…">
+          </label>
+        </div>
+        <div id="campo-base-url" class="hidden">
+          <label>URL do servidor local <span class="muted">(Ollama: http://localhost:11434/v1)</span>
+            <input name="base_url" placeholder="http://localhost:11434/v1">
+          </label>
+        </div>
+
+        <p class="erro hidden" id="criar-erro"></p>
+        <button type="submit" id="btn-criar">Criar Cortex</button>
+      </form>
+
+      <div id="criar-sucesso" class="hidden sucesso">
+        <h2>✓ Cortex criado</h2>
+        <p>Deploy em <code id="sucesso-caminho"></code></p>
+        <h3>Próximos passos</h3>
+        <ol id="sucesso-passos"></ol>
+        <button data-tela="meus" class="ir-meus">Ir para Meus Cortexes</button>
+      </div>
+    </section>
+
+    <!-- ============================ MEUS ============================== -->
+    <section id="tela-meus" class="hidden">
+      <h1>Meus Cortexes</h1>
+      <div id="cards" class="cards-deploys"><p class="muted">Carregando…</p></div>
+    </section>
+  </main>
+
+  <!-- ========================== MINI-CHAT ============================= -->
+  <div id="chat" class="chat hidden">
+    <div class="chat-caixa">
+      <div class="chat-topo">
+        <strong id="chat-titulo">Testar</strong>
+        <button class="link" id="chat-fechar">fechar ✕</button>
+      </div>
+      <p class="muted chat-aviso">Conversa efêmera de teste — a operação de verdade
+        (fila, memória, WhatsApp) vive no painel de operação.</p>
+      <div class="chat-msgs" id="chat-msgs"></div>
+      <form id="chat-form">
+        <input id="chat-texto" placeholder="Escreva uma mensagem…" autocomplete="off">
+        <button type="submit">Enviar</button>
+      </form>
+    </div>
+  </div>
+
+  <footer>
+    Criador Visual de Cortexes — ferramenta local do operador (127.0.0.1).
+    Não exponha esta porta em rede sem TLS e autenticação.
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
