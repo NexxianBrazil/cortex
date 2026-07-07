@@ -280,6 +280,34 @@ def _novo(args) -> int:
     return 0
 
 
+def _criar_visual(args) -> int:
+    """Sobe o Criador Visual de Cortexes — wizard web local de instalação/criação.
+
+    Ferramenta de OPERADOR na própria máquina: 127.0.0.1 por padrão, sem auth
+    própria. Exposição em rede exigiria TLS + autenticação (ver README).
+    """
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from cortex.creator import GerenciadorProcessos, criar_app_criador
+
+    base = Path(args.base).expanduser()
+    app = criar_app_criador(base_dir=base, processos=GerenciadorProcessos(base_dir=base))
+    url = f"http://{args.host}:{args.porta}"
+    if args.host != "127.0.0.1":
+        print(
+            f"[cortex] ATENÇÃO: escutando em {args.host} — o criador não tem TLS nem "
+            "autenticação; não exponha esta porta fora da sua máquina."
+        )
+    print(f"Criador Visual de Cortexes em {url}  [deploys em {base}]")
+    # Abre o navegador best-effort (headless/SSH não tem navegador — segue no ar).
+    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    uvicorn.run(app, host=args.host, port=args.porta, log_level="info")
+    return 0
+
+
 def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: int | None) -> int:
     """Sobe o gateway HTTP do deploy (FastAPI/uvicorn) com canal de saída e notificação."""
     import uvicorn
@@ -485,6 +513,15 @@ def main(argv: list[str] | None = None) -> int:
     novo.add_argument("--gestor", required=True, help="nome do gestor humano")
     novo.add_argument("--dominio", default="geral", help="domínio operacional (rótulo)")
 
+    criar_visual = subparsers.add_parser(
+        "criar-visual", help="abre o Criador Visual de Cortexes (wizard web local)"
+    )
+    criar_visual.add_argument("--host", default="127.0.0.1", help="host de escuta (localhost)")
+    criar_visual.add_argument("--porta", type=int, default=8500, help="porta do criador")
+    criar_visual.add_argument(
+        "--base", default="~/cortexes", help="diretório-base dos deploys (default ~/cortexes)"
+    )
+
     servir = subparsers.add_parser(
         "servir", parents=[comum], help="sobe o gateway HTTP do deploy (para bridges)"
     )
@@ -572,9 +609,11 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    # `novo` cria um deploy — não carrega config de um deploy existente.
+    # `novo` e `criar-visual` criam deploys — não carregam config de um existente.
     if args.comando == "novo":
         return _novo(args)
+    if args.comando == "criar-visual":
+        return _criar_visual(args)
 
     deploy = getattr(args, "deploy", None)  # SUPPRESS: ausente quando não passado
     try:

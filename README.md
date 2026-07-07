@@ -42,6 +42,31 @@ Trocar de provedor de LLM é só configuração — o loop não muda:
 | `claude` | API Anthropic (SDK oficial) | `ANTHROPIC_API_KEY` |
 | `openai` | Protocolo OpenAI: OpenAI, Ollama, vLLM, LLM interna | `OPENAI_API_KEY` e/ou `OPENAI_BASE_URL` |
 
+## Criador Visual de Cortexes
+
+A porta de entrada **sem terminal**: um wizard web local que diagnostica o
+ambiente, cria um Cortex pela tela (chamando o mesmo scaffold do `cortex novo`),
+sobe/para o servidor de operação de cada deploy, indexa a KB e oferece um
+mini-chat de teste (provider `stub` funciona offline).
+
+```bash
+cortex criar-visual                # abre http://127.0.0.1:8500 no navegador
+cortex criar-visual --base ~/acps  # diretório-base dos deploys (default ~/cortexes)
+```
+
+Fronteira: o criador é **alocação** (nascer/configurar um Cortex — nome, função,
+gestor, provider, KB). Ele **não** edita SOUL/formação nem escreve memória — a
+operação da verdade vive no painel de operação de cada deploy (`/painel`).
+Chave de API informada no wizard vai para o `.env` do deploy, nunca para o
+`cortex.toml`.
+
+**Segurança**: é uma ferramenta de operador local — escuta em `127.0.0.1` e não
+tem TLS nem autenticação própria (na mesma máquina, quem acessa é o próprio
+operador). **Não exponha essa porta em rede**; qualquer exposição exigiria TLS +
+autenticação na frente (reverse proxy), o que está fora de escopo por ora. O
+registro dos servidores subidos (PID/porta por deploy) fica em
+`~/.cortex-creator/`.
+
 ## Estrutura do repositório
 
 ```
