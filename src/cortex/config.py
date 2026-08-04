@@ -42,7 +42,9 @@ class CortexConfig(BaseSettings):
     )
 
     # --- escolha do provedor (trocar aqui NÃO muda o loop) ---
-    provider: Literal["stub", "claude", "openai"] = "stub"
+    # "claude_code" é caminho de DEV/uso próprio (Claude Agent SDK + assinatura
+    # do Claude Code logado na máquina); produção usa "claude" (API key).
+    provider: Literal["stub", "claude", "openai", "claude_code"] = "stub"
     modelo: str | None = Field(
         default=None,
         description="Modelo do provedor ativo; None usa o padrão do provedor",
