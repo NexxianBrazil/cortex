@@ -6,6 +6,7 @@ partir do registro, o hook PreToolUse como função, o evento de auditoria e o
 erro de montagem sem o extra) rodam sempre, sem SDK.
 """
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -24,10 +25,13 @@ from cortex.runtime.executor_claude_code import (
     EXECUTOR,
     MENSAGEM_EXTRA_AUSENTE,
     PREFIXO_MCP,
+    RAZAO_FALHA_GOVERNANCA,
     ClaudeCodeIndisponivelError,
     EstadoTurno,
     allowed_tools_do_registro,
     avaliar_pre_tool_use,
+    criar_hook_post,
+    criar_hook_pre,
     nome_do_registro,
     nome_mcp,
     registrar_post_tool_use,
@@ -137,6 +141,62 @@ def test_hook_nega_builtin_fora_do_catalogo(engine_enforce):
         {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}, engine_enforce
     )
     assert saida["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+# ---------------------------------------------------------------------------
+# 2b. FAIL-CLOSED: exceção na governança NEGA a ação (nunca fail-open)
+# ---------------------------------------------------------------------------
+
+
+class _EngineQueExplode:
+    """DecisionEngine cujo avaliar levanta — simula governança quebrada."""
+
+    mode = DecisionMode.ENFORCE
+
+    def avaliar(self, tool, argumentos):
+        raise RuntimeError("boom na governança")
+
+
+def test_hook_pre_e_fail_closed_quando_a_avaliacao_explode(tmp_path):
+    estado = EstadoTurno()
+    audit = AuditTrail(tmp_path / "audit.jsonl")
+    hook = criar_hook_pre(_EngineQueExplode(), audit=audit, estado=estado)
+
+    saida = asyncio.run(hook({"tool_name": nome_mcp("x"), "tool_input": {"a": 1}}, None, None))
+
+    hso = saida["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert hso["permissionDecisionReason"] == RAZAO_FALHA_GOVERNANCA
+    assert estado.bloqueios == 1
+
+    linhas = [json.loads(li) for li in (tmp_path / "audit.jsonl").read_text().splitlines()]
+    ev = next(li for li in linhas if li["tipo"] == "decisao_tool")
+    assert ev["verdict"] == "erro_governanca"
+    assert ev["executou"] is False
+    assert ev["executor"] == "claude_code"
+    assert "boom" in ev["motivos"][0]
+
+
+def test_hook_pre_nega_mesmo_com_audit_quebrado():
+    """Audit indisponível não pode reabrir a porta: a negação se mantém."""
+
+    class _AuditQueExplode:
+        def registrar(self, *a, **kw):
+            raise OSError("disco cheio")
+
+    hook = criar_hook_pre(_EngineQueExplode(), audit=_AuditQueExplode())
+    saida = asyncio.run(hook({"tool_name": nome_mcp("x"), "tool_input": {}}, None, None))
+    assert saida["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hook_post_nao_derruba_o_turno_em_falha():
+    class _AuditQueExplode:
+        def registrar(self, *a, **kw):
+            raise OSError("disco cheio")
+
+    hook = criar_hook_post(audit=_AuditQueExplode())
+    saida = asyncio.run(hook({"tool_name": nome_mcp("x"), "tool_response": {}}, "id1", None))
+    assert saida == {}
 
 
 # ---------------------------------------------------------------------------

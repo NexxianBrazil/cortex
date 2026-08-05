@@ -272,6 +272,89 @@ def avaliar_pre_tool_use(
     return _deny(_mensagem_bloqueio(decisao, nome, argumentos, memory, persona_nome))
 
 
+RAZAO_FALHA_GOVERNANCA = (
+    "falha interna na avaliação de governança — ação negada por segurança "
+    "(fail-closed); tente novamente ou escale ao gestor"
+)
+
+
+def criar_hook_pre(
+    decision: DecisionEngine | None,
+    audit=None,
+    memory=None,
+    persona_nome: str = "",
+    estado: EstadoTurno | None = None,
+):
+    """Fabrica o hook async PreToolUse — FAIL-CLOSED por construção.
+
+    Se a avaliação de governança levantar exceção, a tool NÃO executa: o hook
+    nega com razão explícita (simétrico ao loop nativo, onde a exceção aborta
+    antes de executar). O registro do erro no AuditTrail também é protegido —
+    audit quebrado não pode reabrir a porta.
+    """
+
+    async def _pre(input_data: dict, tool_use_id: str | None, context) -> dict:
+        if decision is None:
+            return {}
+        try:
+            return avaliar_pre_tool_use(
+                input_data,
+                decision,
+                audit=audit,
+                memory=memory,
+                persona_nome=persona_nome,
+                estado=estado,
+            )
+        except Exception as exc:
+            logger.error(
+                "hook PreToolUse falhou — negando por fail-closed", exc_info=True
+            )
+            if estado is not None:
+                estado.bloqueios += 1
+            try:
+                if audit is not None:
+                    audit.registrar(
+                        "decisao_tool",
+                        executor=EXECUTOR,
+                        tool=str(input_data.get("tool_name", "")),
+                        risco=None,
+                        modo=decision.mode.value,
+                        verdict="erro_governanca",
+                        executou=False,
+                        bloqueavel=True,
+                        soul_behavior_id=None,
+                        motivos=[repr(exc)[:200]],
+                        argumentos=dict(input_data.get("tool_input") or {}),
+                    )
+            except Exception:
+                logger.error(
+                    "audit indisponível ao registrar o fail-closed — negação mantida",
+                    exc_info=True,
+                )
+            return _deny(RAZAO_FALHA_GOVERNANCA)
+
+    return _pre
+
+
+def criar_hook_post(
+    audit=None, declaracoes: Mapping[str, ToolDeclaration] | None = None
+):
+    """Fabrica o hook async PostToolUse — falha de registro NUNCA derruba o turno."""
+
+    async def _post(input_data: dict, tool_use_id: str | None, context) -> dict:
+        try:
+            return registrar_post_tool_use(
+                input_data, tool_use_id, audit=audit, declaracoes=declaracoes
+            )
+        except Exception:
+            logger.error(
+                "hook PostToolUse falhou — registro perdido, turno segue", exc_info=True
+            )
+            return {}
+
+    return _post
+
+
 def registrar_post_tool_use(
     evento: dict,
     tool_use_id: str | None,
@@ -415,28 +498,16 @@ class ExecutorClaudeCode:
 
         sdk = self._sdk
         estado = EstadoTurno()
-        persona_nome = session.persona.soul.nome
-        decision = self._decision
-        audit = self._audit
-        memory = self._memory
-        declaracoes = self._declaracoes
-
-        async def _pre(input_data: dict, tool_use_id: str | None, context) -> dict:
-            if decision is None:
-                return {}
-            return avaliar_pre_tool_use(
-                input_data,
-                decision,
-                audit=audit,
-                memory=memory,
-                persona_nome=persona_nome,
-                estado=estado,
-            )
-
-        async def _post(input_data: dict, tool_use_id: str | None, context) -> dict:
-            return registrar_post_tool_use(
-                input_data, tool_use_id, audit=audit, declaracoes=declaracoes
-            )
+        # Hooks fabricados FAIL-CLOSED (ver criar_hook_pre/criar_hook_post):
+        # erro na governança nega a ação; erro no registro não derruba o turno.
+        _pre = criar_hook_pre(
+            self._decision,
+            audit=self._audit,
+            memory=self._memory,
+            persona_nome=session.persona.soul.nome,
+            estado=estado,
+        )
+        _post = criar_hook_post(audit=self._audit, declaracoes=self._declaracoes)
 
         servidor = sdk.create_sdk_mcp_server(
             name=SERVIDOR_MCP,
