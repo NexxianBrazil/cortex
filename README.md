@@ -41,6 +41,12 @@ Trocar de provedor de LLM é só configuração — o loop não muda:
 | `stub` (padrão) | LLM falso determinístico (CI/dev) | nenhum |
 | `claude` | API Anthropic (SDK oficial) | `ANTHROPIC_API_KEY` |
 | `openai` | Protocolo OpenAI: OpenAI, Ollama, vLLM, LLM interna | `OPENAI_API_KEY` e/ou `OPENAI_BASE_URL` |
+| `claude_code` | **Dev/uso próprio (assinatura)**: loop do agente roda no Claude Agent SDK, com as tools do Cortex via MCP in-process e a governança nos hooks | `pip install -e ".[claudecode]"` + Claude Code logado na máquina |
+
+> `claude_code` existe para desenvolvimento com a assinatura do Claude Code —
+> **produção usa `claude` (API key)**. Trade-off honesto: são dois caminhos de
+> execução (loop nativo × loop no SDK); a paridade de comportamento é garantida
+> por teste, não por compartilhar código do loop.
 
 ## Estrutura do repositório
 

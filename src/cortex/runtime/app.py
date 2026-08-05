@@ -159,11 +159,18 @@ def montar_runtime(
     O mesmo engine serve várias Sessions no processo — é o que faz a persona
     lembrar de uma conversa para outra (e, com store=graphiti, entre
     execuções). O provider é compartilhado entre o loop e o LLMClassifier.
+
+    `provider="claude_code"` (DEV/uso próprio) troca o loop nativo pelo
+    executor sobre o Claude Agent SDK — mesma interface de alto nível, mesmas
+    costuras (Session, recall, promoção, AuditTrail, governança REUSADA).
     """
     from cortex.runtime.comandos_fila import ContextoTurno, registrar_gerenciar_fila
     from cortex.runtime.extracao_conversa import criar_extrator_conversa
     from cortex.sor.factory import criar_gateway
     from cortex.sor.tools import registrar_tools_sor
+
+    if config.provider == "claude_code":
+        return _montar_runtime_claude_code(config, persona)
 
     provider = criar_provider(config)
     # Um único gateway do SOR serve o cético (GatewaySourceOfTruth) E as tools
@@ -203,3 +210,66 @@ def montar_runtime(
         contexto_turno=contexto,
     )
     return loop, engine
+
+
+def _montar_runtime_claude_code(config: CortexConfig, persona: Persona):
+    """Composição do executor SDK (provider=claude_code) — DEV/uso próprio.
+
+    Tudo em volta permanece igual ao caminho nativo (engine, governança REUSADA,
+    registry, fila, extrator, audit); só o processador de turno muda: o loop do
+    agente vive no Claude Agent SDK, cercado pelos hooks de governança.
+
+    Não há LLMProvider neste caminho (o modelo é o do Claude Code logado), então
+    os SEAMs que exigem provider (classifier=llm, extrator_conversa=llm) não são
+    suportados — falha alto e claro, em vez de degradar em silêncio.
+    """
+    from cortex.runtime.comandos_fila import ContextoTurno, registrar_gerenciar_fila
+    from cortex.runtime.executor_claude_code import ExecutorClaudeCode
+    from cortex.runtime.extracao_conversa import criar_extrator_conversa
+    from cortex.runtime.providers import ConfiguracaoProviderError
+    from cortex.sor.factory import criar_gateway
+    from cortex.sor.tools import registrar_tools_sor
+    from cortex.sor.truth import GatewaySourceOfTruth
+
+    if config.classifier == "llm" or config.extrator_conversa == "llm":
+        raise ConfiguracaoProviderError(
+            "provider=claude_code não fornece LLMProvider interno: use "
+            "classifier=heuristic e extrator_conversa=heuristico"
+        )
+
+    gateway = criar_gateway(config)
+    engine = MemoryEngine(
+        store=criar_store(config),
+        classifier=criar_classifier(config),
+        authority_map=autoridade_da_persona(persona),
+        source_of_truth=GatewaySourceOfTruth(gateway),
+    )
+    audit = AuditTrail(config.audit_path) if config.audit else None
+    # O DecisionEngine é REUSADO tal e qual, mas SEM audit próprio: quem grava a
+    # decisão é o hook PreToolUse, no mesmo formato + executor="claude_code".
+    decision = montar_decision_engine(
+        config, persona, buscar_excecao=engine.consumir_excecao, audit=None
+    )
+    registry = criar_registry_mock(persona.tools)
+    registrar_kb(registry, config, persona)
+    registrar_tools_sor(registry, gateway)
+
+    extrator = (
+        criar_extrator_conversa(config, None) if config.aprendizado_conversacional else None
+    )
+    contexto = ContextoTurno()
+    registrar_gerenciar_fila(registry, engine, contexto, audit=audit, dominio=DOMINIO_PADRAO)
+
+    executor = ExecutorClaudeCode(
+        registry=registry,
+        declaracoes=persona.tools,
+        max_iteracoes=config.max_iteracoes,
+        memory=engine,
+        recall_limite=config.memoria_recall_max,
+        decision=decision,
+        audit=audit,
+        extrator_conversa=extrator,
+        contexto_turno=contexto,
+        modelo=config.modelo,
+    )
+    return executor, engine
