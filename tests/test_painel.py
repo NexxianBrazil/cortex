@@ -67,7 +67,7 @@ def _engine_com_proposta_externa():
     return engine
 
 
-def _app(persona, engine, tmp_path, *, operador="Carlos Menezes"):
+def _app(persona, engine, tmp_path, *, operador="Carlos Menezes", deploy_dir=None):
     kb_path = tmp_path / "kb"
     kb_path.mkdir(exist_ok=True)
     kb = KnowledgeBase(kb_path, StubEmbedder())
@@ -86,6 +86,7 @@ def _app(persona, engine, tmp_path, *, operador="Carlos Menezes"):
         kb=kb,
         audit=None,
         painel_operador=operador,
+        deploy_dir=deploy_dir,
     )
 
 
@@ -200,3 +201,94 @@ def test_memoria_read_only_e_historico(persona, tmp_path):
     assert any(c["key"] == "cliente:ACME:prazo" for c in mem["crencas"])
     hist = client.get("/painel/api/memoria/cliente:ACME:prazo/historico").json()
     assert len(hist["historico"]) >= 1  # a linha bi-temporal da chave
+
+
+# --------------------------- troca de senha (7d+) --------------------------- #
+
+TOML_EXEMPLO = '''# Cortex — deploy de exemplo
+painel_habilitado = true
+painel_senha = "s3nha-do-painel"   # senha do operador
+painel_operador = "Carlos Menezes"
+'''
+
+
+def _deploy_com_toml(tmp_path) -> Path:
+    """Deploy mínimo: só o cortex.toml (é o que a troca de senha reescreve)."""
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "cortex.toml").write_text(TOML_EXEMPLO, encoding="utf-8")
+    return deploy
+
+
+def test_troca_de_senha_persiste_no_toml_e_vale_no_ato(persona, tmp_path):
+    deploy = _deploy_com_toml(tmp_path)
+    client = TestClient(_app(persona, _engine_com_proposta_externa(), tmp_path, deploy_dir=deploy))
+    _logar(client)
+
+    r = client.post(
+        "/painel/api/senha", json={"senha_atual": SENHA, "nova_senha": "nova-senha-forte"}
+    )
+    assert r.status_code == 200
+
+    # 1) persistiu no toml (só a linha da senha; comentários preservados)
+    texto = (deploy / "cortex.toml").read_text(encoding="utf-8")
+    assert 'painel_senha = "nova-senha-forte"   # senha do operador' in texto
+    assert "painel_operador" in texto and "# Cortex — deploy de exemplo" in texto
+    assert SENHA not in texto
+
+    # 2) vale no ato, sem reiniciar: a antiga não loga, a nova sim
+    novo = TestClient(client.app)
+    assert novo.post("/painel/login", json={"senha": SENHA}).status_code == 401
+    assert novo.post("/painel/login", json={"senha": "nova-senha-forte"}).status_code == 200
+
+    # 3) a sessão que trocou continua viva (cookie reemitido)
+    assert client.get("/painel/api/resumo").status_code == 200
+
+
+def test_troca_de_senha_exige_a_atual_e_valida_a_nova(persona, tmp_path):
+    deploy = _deploy_com_toml(tmp_path)
+    client = TestClient(_app(persona, _engine_com_proposta_externa(), tmp_path, deploy_dir=deploy))
+    _logar(client)
+
+    # senha atual errada → 401 (estar logado não basta)
+    r = client.post(
+        "/painel/api/senha", json={"senha_atual": "errada", "nova_senha": "outra-senha"}
+    )
+    assert r.status_code == 401
+    # curta demais → 400
+    r = client.post("/painel/api/senha", json={"senha_atual": SENHA, "nova_senha": "curta"})
+    assert r.status_code == 400
+    # igual à atual → 400
+    r = client.post("/painel/api/senha", json={"senha_atual": SENHA, "nova_senha": SENHA})
+    assert r.status_code == 400
+    # nada disso tocou o arquivo
+    assert f'painel_senha = "{SENHA}"' in (deploy / "cortex.toml").read_text(encoding="utf-8")
+
+
+def test_troca_de_senha_sem_sessao_e_sem_toml(persona, tmp_path):
+    # sem cookie → 401 (rota protegida)
+    sem_sessao = TestClient(_app(persona, _engine_com_proposta_externa(), tmp_path))
+    r = sem_sessao.post("/painel/api/senha", json={"senha_atual": SENHA, "nova_senha": "x" * 10})
+    assert r.status_code == 401
+
+    # deploy sem cortex.toml conhecido (dev rodando do CWD) → 409 explicativo
+    client = TestClient(_app(persona, _engine_com_proposta_externa(), tmp_path))
+    _logar(client)
+    r = client.post("/painel/api/senha", json={"senha_atual": SENHA, "nova_senha": "x" * 10})
+    assert r.status_code == 409
+    assert "cortex.toml" in r.json()["detail"]
+
+
+def test_atualizar_senha_no_toml_escapa_e_falha_claro(tmp_path):
+    from cortex.server.painel import SenhaTomlError, atualizar_senha_no_toml
+
+    alvo = tmp_path / "cortex.toml"
+    alvo.write_text(TOML_EXEMPLO, encoding="utf-8")
+    atualizar_senha_no_toml(alvo, 'a"b\\c')
+    assert 'painel_senha = "a\\"b\\\\c"' in alvo.read_text(encoding="utf-8")
+
+    # arquivo sem a linha → erro claro, não silencioso
+    vazio = tmp_path / "outro.toml"
+    vazio.write_text("painel_habilitado = true\n", encoding="utf-8")
+    with pytest.raises(SenhaTomlError, match="painel_senha"):
+        atualizar_senha_no_toml(vazio, "qualquer-senha")
