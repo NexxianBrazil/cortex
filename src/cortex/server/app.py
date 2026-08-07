@@ -212,6 +212,13 @@ def criar_app(
                 # cortex.toml do deploy: sem ele a troca de senha pelo painel
                 # responde 409 explicando como trocar à mão (dev roda do CWD).
                 toml_path=(Path(deploy_dir) / "cortex.toml") if deploy_dir else None,
+                # Modo mestre (edição de formação): sem senha aqui, não existe.
+                senha_mestre=(
+                    config.painel_senha_mestre.get_secret_value()
+                    if config.painel_senha_mestre
+                    else None
+                ),
+                personas_dir=config.personas_dir,
             )
             logger.info("painel do operador em /painel (operador=%s)", painel_operador)
         else:

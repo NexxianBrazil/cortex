@@ -10,10 +10,12 @@ Autenticação do OPERADOR (pessoa no navegador) por cookie assinado (HMAC stdli
 HttpOnly) — separada do token de bridge das rotas /v1/* (clientes diferentes).
 """
 
+import difflib
 import hashlib
 import hmac
 import logging
 import re
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,22 +44,46 @@ COOKIE = "painel_sessao"
 
 # --------------------------- cookie assinado (HMAC) ------------------------ #
 
-
-def _assinar(segredo: str, expira_em: int) -> str:
-    sig = hmac.new(segredo.encode(), str(expira_em).encode(), hashlib.sha256).hexdigest()
-    return f"{expira_em}.{sig}"
+PAPEL_OPERADOR = "operador"
+PAPEL_MESTRE = "mestre"
 
 
-def _cookie_valido(segredo: str, valor: str | None) -> bool:
-    if not valor or "." not in valor:
+def _assinar(segredo: str, expira_em: int, papel: str = PAPEL_OPERADOR) -> str:
+    """Cookie = papel.expiração.assinatura, assinado com o segredo DAQUELE papel.
+
+    O papel entra no material assinado: forjar `mestre` exige a senha mestre —
+    quem tem só a senha de operador não consegue escalar editando o cookie.
+    """
+    msg = f"{papel}.{expira_em}".encode()
+    sig = hmac.new(segredo.encode(), msg, hashlib.sha256).hexdigest()
+    return f"{papel}.{expira_em}.{sig}"
+
+
+def _cookie_valido(segredo: str, valor: str | None, papel: str = PAPEL_OPERADOR) -> bool:
+    if not segredo or not valor:
         return False
-    exp_str, sig = valor.rsplit(".", 1)
+    partes = valor.split(".")
+    if len(partes) != 3:
+        return False
+    papel_cookie, exp_str, sig = partes
+    if papel_cookie != papel:
+        return False
     try:
         expira_em = int(exp_str)
     except ValueError:
         return False
-    esperado = hmac.new(segredo.encode(), str(expira_em).encode(), hashlib.sha256).hexdigest()
+    msg = f"{papel_cookie}.{expira_em}".encode()
+    esperado = hmac.new(segredo.encode(), msg, hashlib.sha256).hexdigest()
     return hmac.compare_digest(sig, esperado) and expira_em > int(time.time())
+
+
+def papel_do_cookie(valor: str | None, senha: str, senha_mestre: str | None) -> str | None:
+    """Papel da sessão pelo cookie: 'mestre', 'operador' — ou None se inválido."""
+    if senha_mestre and _cookie_valido(senha_mestre, valor, PAPEL_MESTRE):
+        return PAPEL_MESTRE
+    if _cookie_valido(senha, valor, PAPEL_OPERADOR):
+        return PAPEL_OPERADOR
+    return None
 
 
 # --------------------------- senha do operador ----------------------------- #
@@ -102,6 +128,104 @@ def atualizar_senha_no_toml(toml_path: Path, nova: str) -> None:
     temp = toml_path.with_suffix(toml_path.suffix + ".tmp")
     temp.write_text(novo_texto, encoding="utf-8")
     temp.replace(toml_path)
+
+
+# --------------------------- formação (modo mestre) ------------------------ #
+
+PASTA_HISTORICO = ".historico"
+# Arquivos de formação editáveis pelo modo mestre. tools.yaml fica de FORA: o
+# catálogo tem integridade referencial com os playbooks (quebrar um nome de
+# tool derruba a montagem inteira) — edição dele segue por Git.
+_VALIDADORES = {
+    "SOUL.md": "carregar_soul",
+    "USER.md": "carregar_user",
+    "AGENTS.md": None,      # índice em prosa: sem schema estruturado a validar
+}
+
+
+class FormacaoPathError(Exception):
+    """Caminho pedido não é um arquivo de formação válido deste deploy."""
+
+
+def resolver_arquivo_formacao(personas_dir: Path, arquivo: str) -> Path:
+    """Traduz o nome pedido em caminho ABSOLUTO dentro de personas/ — ou levanta.
+
+    Deny-by-default contra traversal: recusa caminho absoluto, '..', qualquer
+    coisa que não termine em .md e tudo que, depois de resolvido, caia fora de
+    personas/. Só SOUL/USER/AGENTS na raiz e .md dentro de playbooks/.
+    """
+    nome = (arquivo or "").strip().replace("\\", "/")
+    if not nome or nome.startswith("/") or ".." in nome.split("/"):
+        raise FormacaoPathError(f"caminho inválido: {arquivo!r}")
+    if not nome.endswith(".md"):
+        raise FormacaoPathError("só arquivos .md da formação podem ser lidos/editados")
+    partes = nome.split("/")
+    permitido = (len(partes) == 1 and partes[0] in _VALIDADORES) or (
+        len(partes) == 2 and partes[0] == "playbooks"
+    )
+    if not permitido:
+        raise FormacaoPathError(
+            f"{arquivo!r} não é um arquivo de formação editável "
+            f"(use {', '.join(_VALIDADORES)} ou playbooks/<nome>.md)"
+        )
+    base = personas_dir.resolve()
+    destino = (base / nome).resolve()
+    if not destino.is_relative_to(base):   # cinto e suspensório pós-resolve
+        raise FormacaoPathError(f"caminho fora de personas/: {arquivo!r}")
+    return destino
+
+
+def validar_conteudo_formacao(nome: str, conteudo: str, tmp_dir: Path) -> None:
+    """Valida o conteúdo NOVO com o MESMO parser da camada de identidade.
+
+    Escreve num arquivo temporário e roda o parser real (carregar_soul/user/
+    playbook) — YAML malformado ou schema quebrado levanta PersonaParseError
+    ANTES de tocarmos o arquivo verdadeiro.
+    """
+    from cortex.identity.parser import carregar_playbook, carregar_soul, carregar_user
+
+    base = nome.split("/")[-1]
+    if nome.startswith("playbooks/"):
+        parser = carregar_playbook
+    elif base == "SOUL.md":
+        parser = carregar_soul
+    elif base == "USER.md":
+        parser = carregar_user
+    else:
+        return   # AGENTS.md: prosa livre, nada estruturado a validar
+    alvo = tmp_dir / base
+    alvo.write_text(conteudo, encoding="utf-8")
+    parser(alvo)   # PersonaParseError sobe para o chamador
+
+
+def _fazer_backup(personas_dir: Path, nome: str, destino: Path) -> str | None:
+    """Copia a versão atual para personas/.historico/ antes de sobrescrever.
+
+    Nome achatado (playbooks/x.md → playbooks_x.md) para tudo caber num
+    diretório só, com timestamp UTC — histórico legível sem subpastas.
+    """
+    if not destino.is_file():
+        return None
+    hist = personas_dir / PASTA_HISTORICO
+    hist.mkdir(parents=True, exist_ok=True)
+    carimbo = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    plano = nome.replace("/", "_").removesuffix(".md")
+    copia = hist / f"{plano}.{carimbo}.md"
+    copia.write_text(destino.read_text(encoding="utf-8"), encoding="utf-8")
+    return copia.name
+
+
+def _diff_unificado(antes: str, depois: str, nome: str, max_linhas: int = 200) -> str:
+    """Diff legível para o audit — truncado para não inchar a trilha."""
+    linhas = list(
+        difflib.unified_diff(
+            antes.splitlines(), depois.splitlines(),
+            fromfile=f"a/{nome}", tofile=f"b/{nome}", lineterm="", n=2,
+        )
+    )
+    if len(linhas) > max_linhas:
+        linhas = linhas[:max_linhas] + [f"... (+{len(linhas) - max_linhas} linhas)"]
+    return "\n".join(linhas)
 
 
 # --------------------------- serialização leve ----------------------------- #
@@ -171,6 +295,8 @@ def montar_painel(
     operador: str,
     sessao_horas: int,
     toml_path: Path | None = None,
+    senha_mestre: str | None = None,
+    personas_dir: Path | None = None,
 ) -> None:
     """Registra as rotas do painel no app. `operador` é o autor das decisões.
 
@@ -180,6 +306,14 @@ def montar_painel(
 
     `toml_path` é o cortex.toml do deploy — necessário para a troca de senha
     pelo painel (sem ele a rota responde 409 explicando como trocar à mão).
+
+    MODO MESTRE (`senha_mestre`): senha SEPARADA que dá à sessão o papel
+    'mestre', único que pode editar a FORMAÇÃO (SOUL/USER/playbooks). Fail-safe
+    igual ao da senha do painel: vazia/ausente = o modo mestre NÃO EXISTE e as
+    rotas de formação respondem 403 para todo mundo. A fronteira original segue
+    valendo para o OPERADOR (cliente): ele configura, cura e aprova — nunca
+    edita formação. O mestre é o criador/dev, e cada edição sua é auditada com
+    diff e gera backup.
     """
     if papel_no_user_md(persona, operador) is None:
         raise ValueError(
@@ -192,17 +326,36 @@ def montar_painel(
     # closure sobre o valor, para a troca valer no ato, sem reiniciar o serviço.
     # É também o segredo que assina o cookie: trocar a senha invalida as
     # sessões abertas (inclusive as de quem roubou a senha antiga).
-    estado = {"senha": senha}
+    estado = {"senha": senha, "senha_mestre": (senha_mestre or "").strip() or None}
+
+    def sessao_papel(painel_sessao: str | None = Cookie(default=None)) -> str:
+        papel = papel_do_cookie(painel_sessao, estado["senha"], estado["senha_mestre"])
+        if papel is None:
+            raise HTTPException(status_code=401, detail="sessão do painel ausente ou expirada")
+        return papel
 
     def requer_painel(painel_sessao: str | None = Cookie(default=None)) -> None:
-        if not _cookie_valido(estado["senha"], painel_sessao):
-            raise HTTPException(status_code=401, detail="sessão do painel ausente ou expirada")
+        sessao_papel(painel_sessao)
 
-    def _emitir_cookie(response: Response) -> None:
+    def requer_mestre(painel_sessao: str | None = Cookie(default=None)) -> str:
+        """Só o MESTRE passa. Sem senha mestre configurada, ninguém passa."""
+        if not estado["senha_mestre"]:
+            raise HTTPException(
+                status_code=403,
+                detail="modo mestre não está habilitado neste deploy (painel_senha_mestre vazia)",
+            )
+        if sessao_papel(painel_sessao) != PAPEL_MESTRE:
+            raise HTTPException(
+                status_code=403, detail="ação restrita ao modo mestre (edição de formação)"
+            )
+        return PAPEL_MESTRE
+
+    def _emitir_cookie(response: Response, papel: str = PAPEL_OPERADOR) -> None:
+        segredo = estado["senha_mestre"] if papel == PAPEL_MESTRE else estado["senha"]
         expira_em = int(time.time()) + sessao_horas * 3600
         response.set_cookie(
             COOKIE,
-            _assinar(estado["senha"], expira_em),
+            _assinar(segredo, expira_em, papel),
             httponly=True,
             samesite="lax",
             max_age=sessao_horas * 3600,
@@ -216,10 +369,17 @@ def montar_painel(
 
     @router.post("/login")
     def login(body: dict, response: Response) -> dict:
-        if not hmac.compare_digest(str(body.get("senha", "")), estado["senha"]):
+        """Mesma porta para os dois papéis: a SENHA decide se é mestre ou operador."""
+        oferecida = str(body.get("senha", ""))
+        mestre = estado["senha_mestre"]
+        if mestre and hmac.compare_digest(oferecida, mestre):
+            _emitir_cookie(response, PAPEL_MESTRE)
+            logger.info("login no painel em MODO MESTRE")
+            return {"ok": True, "operador": operador, "papel": PAPEL_MESTRE}
+        if not hmac.compare_digest(oferecida, estado["senha"]):
             raise HTTPException(status_code=401, detail="senha inválida")
         _emitir_cookie(response)
-        return {"ok": True, "operador": operador}
+        return {"ok": True, "operador": operador, "papel": PAPEL_OPERADOR}
 
     @router.post("/logout")
     def logout(response: Response) -> dict:
@@ -238,11 +398,12 @@ def montar_painel(
                 total += int(ln.get("input_tokens", 0)) + int(ln.get("output_tokens", 0))
         return total
 
-    @router.get("/api/resumo", dependencies=[_dep(requer_painel)])
-    def resumo() -> dict:
+    @router.get("/api/resumo")
+    def resumo(papel_sessao: str = _dep(sessao_papel)) -> dict:
         return {
             "persona": persona.soul.nome,
-            "papel": persona.soul.papel,
+            "papel": persona.soul.papel,          # papel PROFISSIONAL da persona
+            "modo": papel_sessao,                 # papel da SESSÃO: operador | mestre
             "gestor": persona.user.autoridade.gestor.nome,
             "operador": operador,
             "crencas_ativas": len(engine.beliefs_ativos()),
@@ -358,6 +519,100 @@ def montar_painel(
     def kb_reindexar() -> dict:
         with lock:
             return {"ok": True, **kb.indexar()}
+
+    # ---- formação (MODO MESTRE — criador/dev, nunca o operador) ---------- #
+
+    def _dir_personas() -> Path:
+        if personas_dir is None:
+            raise HTTPException(
+                status_code=409,
+                detail="deploy sem pasta personas/ conhecida — edite os arquivos direto no disco",
+            )
+        return Path(personas_dir)
+
+    @router.get("/api/formacao", dependencies=[_dep(requer_mestre)])
+    def formacao_listar() -> dict:
+        """Lista os arquivos de formação editáveis (SOUL/USER/AGENTS + playbooks)."""
+        base = _dir_personas()
+        itens = []
+        for nome in _VALIDADORES:
+            alvo = base / nome
+            if alvo.is_file():
+                itens.append({"arquivo": nome, "bytes": alvo.stat().st_size})
+        pb = base / "playbooks"
+        if pb.is_dir():
+            for alvo in sorted(pb.glob("*.md")):
+                itens.append({"arquivo": f"playbooks/{alvo.name}", "bytes": alvo.stat().st_size})
+        return {"arquivos": itens, "personas_dir": str(base)}
+
+    @router.get("/api/formacao/{arquivo:path}", dependencies=[_dep(requer_mestre)])
+    def formacao_ler(arquivo: str) -> dict:
+        base = _dir_personas()
+        try:
+            alvo = resolver_arquivo_formacao(base, arquivo)
+        except FormacaoPathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not alvo.is_file():
+            raise HTTPException(status_code=404, detail=f"não existe: {arquivo}")
+        return {"arquivo": arquivo, "conteudo": alvo.read_text(encoding="utf-8")}
+
+    @router.post("/api/formacao/{arquivo:path}", dependencies=[_dep(requer_mestre)])
+    def formacao_salvar(arquivo: str, body: dict) -> dict:
+        """Salva um arquivo de formação: valida → faz backup → grava → audita.
+
+        Ordem deliberada: NADA toca o disco antes do parser aprovar o conteúdo
+        novo (YAML quebrado deixaria a persona sem subir no próximo boot).
+        """
+        base = _dir_personas()
+        try:
+            alvo = resolver_arquivo_formacao(base, arquivo)
+        except FormacaoPathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        conteudo = body.get("conteudo")
+        if not isinstance(conteudo, str) or not conteudo.strip():
+            raise HTTPException(status_code=400, detail="conteúdo vazio")
+
+        from cortex.identity.parser import PersonaParseError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                validar_conteudo_formacao(arquivo, conteudo, Path(tmp))
+            except PersonaParseError as exc:
+                # Arquivo REAL intocado — o curador corrige e tenta de novo.
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        antes = alvo.read_text(encoding="utf-8") if alvo.is_file() else ""
+        try:
+            backup = _fazer_backup(base, arquivo, alvo)
+            alvo.parent.mkdir(parents=True, exist_ok=True)
+            alvo.write_text(conteudo, encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(status_code=409, detail=f"falha ao gravar: {exc}") from exc
+
+        if audit is not None:
+            audit.registrar(
+                "edicao_formacao",
+                arquivo=arquivo,
+                papel=PAPEL_MESTRE,
+                operador=operador,
+                tamanho_antes=len(antes),
+                tamanho_depois=len(conteudo),
+                backup=backup,
+                diff=_diff_unificado(antes, conteudo, arquivo),
+            )
+        logger.warning("FORMAÇÃO editada em modo mestre: %s (backup=%s)", arquivo, backup)
+        return {
+            "ok": True,
+            "arquivo": arquivo,
+            "backup": backup,
+            # A persona é carregada UMA vez na subida (Session/loop/painel a
+            # recebem pronta) — não há reload barato: reiniciar é o caminho.
+            "requer_restart": True,
+            "aviso": (
+                "salvo e auditado. A persona em memória só muda no restart do "
+                "serviço (ex.: systemctl restart cortex)."
+            ),
+        }
 
     # ---- senha do operador (protegida) ----------------------------------- #
 

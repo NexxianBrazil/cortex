@@ -31,3 +31,9 @@ session_ttl_minutos = 30
 painel_habilitado = true
 painel_senha = "$painel_senha"
 painel_operador = "$gestor"
+
+# MODO MESTRE (uso do criador/dev): senha separada que libera, no painel, a
+# EDIÇÃO DA FORMAÇÃO (SOUL.md, USER.md, playbooks). Deixe VAZIO em produção —
+# sem senha aqui o modo mestre não existe (o operador nunca edita formação).
+# Toda edição é auditada e gera backup em personas/.historico/.
+painel_senha_mestre = ""
