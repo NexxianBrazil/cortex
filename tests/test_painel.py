@@ -438,3 +438,14 @@ def test_cookie_de_operador_nao_vira_mestre(persona, tmp_path):
     client = TestClient(_app_mestre(persona, tmp_path, pd))
     client.cookies.set("painel_sessao", forjado)
     assert client.get("/painel/api/formacao").status_code in (401, 403)
+
+
+def test_index_versiona_estaticos_e_nao_cacheia(persona, tmp_path):
+    """Cache-busting: atualização de tema/JS chega sem refresh forçado."""
+    client = TestClient(_app(persona, _engine_com_proposta_externa(), tmp_path))
+    r = client.get("/painel")
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "")
+    # os ponteiros para css/js carregam a versão (mtime) — muda o arquivo, muda a URL
+    assert "/painel/static/app.css?v=" in r.text
+    assert "/painel/static/app.js?v=" in r.text

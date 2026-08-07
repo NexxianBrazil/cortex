@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Cookie, FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from cortex.identity.models import Persona
@@ -364,8 +364,23 @@ def montar_painel(
     # ---- página e login (não protegidos) --------------------------------- #
 
     @router.get("")
-    def index() -> FileResponse:
-        return FileResponse(_STATIC_DIR / "index.html")
+    def index() -> HTMLResponse:
+        """Serve o HTML com CSS/JS VERSIONADOS pelo mtime (cache-busting).
+
+        Sem isso, o navegador segura app.css/app.js antigos do cache e uma
+        atualização do painel (tema novo, aba nova) só aparece com refresh
+        forçado — que ninguém lembra de dar. O HTML em si vai com no-store:
+        é pequeno, e é ele que carrega os ponteiros versionados.
+        """
+        html = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        versao = 0
+        for ativo in ("app.css", "app.js"):
+            caminho = _STATIC_DIR / ativo
+            if caminho.is_file():
+                versao = max(versao, int(caminho.stat().st_mtime))
+        html = html.replace("/painel/static/app.css", f"/painel/static/app.css?v={versao}")
+        html = html.replace("/painel/static/app.js", f"/painel/static/app.js?v={versao}")
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     @router.post("/login")
     def login(body: dict, response: Response) -> dict:
