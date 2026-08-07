@@ -50,6 +50,19 @@ class GerenciadorSessoes:
         self._sessoes[chave] = (sessao, agora)
         return sessao
 
+    def descartar(self, canal: str, canal_id: str) -> bool:
+        """Joga fora a Session do contato — o próximo turno começa do zero.
+
+        É a efemeridade sob comando ("nova conversa" no painel): o histórico
+        do turno morre; o que a persona aprendeu já foi promovido à memória.
+        """
+        return self._sessoes.pop((canal, canal_id), None) is not None
+
+    def espiar(self, canal: str, canal_id: str) -> Session | None:
+        """A Session viva do contato, se houver — sem criar nem renovar o TTL."""
+        existente = self._sessoes.get((canal, canal_id))
+        return existente[0] if existente else None
+
     @property
     def ativas(self) -> int:
         return len(self._sessoes)

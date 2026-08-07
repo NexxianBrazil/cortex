@@ -5,12 +5,14 @@ Cobrem auth por cookie, leitura da fila, aprovação governada (autor=operador),
 o teste-assinatura (nenhuma rota escreve crença/SOUL) e a KB curada.
 """
 
+import json
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from cortex.config import CortexConfig
+from cortex.governance.audit import AuditTrail
 from cortex.identity import carregar_persona
 from cortex.knowledge import KnowledgeBase
 from cortex.knowledge.embeddings import StubEmbedder
@@ -67,11 +69,26 @@ def _engine_com_proposta_externa():
     return engine
 
 
-def _app(persona, engine, tmp_path, *, operador="Carlos Menezes", deploy_dir=None):
+def _app(
+    persona,
+    engine,
+    tmp_path,
+    *,
+    operador="Carlos Menezes",
+    deploy_dir=None,
+    senha_mestre=None,
+    personas_dir=None,
+    audit=None,
+):
     kb_path = tmp_path / "kb"
     kb_path.mkdir(exist_ok=True)
     kb = KnowledgeBase(kb_path, StubEmbedder())
-    config = CortexConfig(painel_senha=SENHA, kb_path=kb_path)
+    config = CortexConfig(
+        painel_senha=SENHA,
+        kb_path=kb_path,
+        painel_senha_mestre=senha_mestre,
+        personas_dir=personas_dir or PERSONAS_DIR,
+    )
     loop = AgentLoop(
         StubProvider(roteiro=[LLMResponse(texto="ok")], repetir_ultimo=True),
         criar_registry_mock(persona.tools),
@@ -84,7 +101,7 @@ def _app(persona, engine, tmp_path, *, operador="Carlos Menezes", deploy_dir=Non
         engine=engine,
         config=config,
         kb=kb,
-        audit=None,
+        audit=audit,
         painel_operador=operador,
         deploy_dir=deploy_dir,
     )
@@ -134,11 +151,13 @@ def test_aprovar_com_razao_vira_decisao_do_operador(persona, tmp_path):
     assert client.post("/painel/api/fila/9999/aprovar", json={"razao": "x"}).status_code == 409
 
 
-def test_fronteira_nenhuma_rota_escreve_crenca_nem_toca_soul(persona, tmp_path):
-    """Teste-assinatura: o painel não tem porta dos fundos para escrever verdade.
+def test_fronteira_nenhuma_rota_escreve_crenca_e_formacao_e_so_do_mestre(persona, tmp_path):
+    """Teste-assinatura da fronteira, agora com os DOIS papéis.
 
-    Inspeciona a superfície CANÔNICA de rotas (app.openapi) — estável entre
-    versões de fastapi/starlette, ao contrário dos atributos internos de Route.
+    Para o OPERADOR (cliente) nada mudou: ele propõe/aprova e cura KB, nunca
+    escreve crença nem edita formação. A formação passou a ser editável APENAS
+    pelo MESTRE (criador/dev), e só sob o prefixo do painel — com senha mestre
+    vazia a porta não abre para ninguém (verificado em runtime abaixo).
     """
     app = _app(persona, _engine_com_proposta_externa(), tmp_path)
     caminhos = app.openapi()["paths"]
@@ -147,10 +166,11 @@ def test_fronteira_nenhuma_rota_escreve_crenca_nem_toca_soul(persona, tmp_path):
     for caminho, operacoes in caminhos.items():
         path = caminho.lower()
         metodos_escrita = escreve & {m.lower() for m in operacoes}
-        # NENHUMA rota toca o SOUL (formação é da Nexxian, via Git/Control Plane).
-        assert "soul" not in path
-        # NENHUMA rota de ESCRITA mexe em crença/memória diretamente.
         if metodos_escrita:
+            # (a) toda escrita de FORMAÇÃO mora sob o prefixo do painel
+            if "formacao" in path:
+                assert path.startswith("/painel/"), caminho
+            # NENHUMA rota de ESCRITA mexe em crença/memória diretamente.
             assert "belief" not in path and "crenca" not in path, caminho
             assert "/memoria" not in path, caminho  # memória é só leitura (GET)
 
@@ -158,6 +178,15 @@ def test_fronteira_nenhuma_rota_escreve_crenca_nem_toca_soul(persona, tmp_path):
     escrita = [p for p, ops in caminhos.items() if escreve & {m.lower() for m in ops}]
     assert any("aprovar" in p for p in escrita)
     assert any("rejeitar" in p for p in escrita)
+
+    # (c) sem painel_senha_mestre configurada, formação é 403 SEMPRE — mesmo
+    # para uma sessão de operador válida (o modo mestre simplesmente não existe).
+    client = TestClient(app)
+    _logar(client)
+    assert client.get("/painel/api/formacao").status_code == 403
+    assert client.get("/painel/api/formacao/SOUL.md").status_code == 403
+    r = client.post("/painel/api/formacao/SOUL.md", json={"conteudo": "x"})
+    assert r.status_code == 403
 
 
 def test_kb_upload_valido_indexa_e_invalido_explica(persona, tmp_path):
@@ -292,3 +321,177 @@ def test_atualizar_senha_no_toml_escapa_e_falha_claro(tmp_path):
     vazio.write_text("painel_habilitado = true\n", encoding="utf-8")
     with pytest.raises(SenhaTomlError, match="painel_senha"):
         atualizar_senha_no_toml(vazio, "qualquer-senha")
+
+
+# --------------------------- modo mestre (formação) ------------------------- #
+
+MESTRE = "senha-mestre-do-criador"
+
+
+def _personas_copia(tmp_path) -> Path:
+    """Cópia da formação de exemplo — os testes editam sem sujar o repo."""
+    import shutil
+
+    destino = tmp_path / "personas"
+    shutil.copytree(PERSONAS_DIR, destino)
+    return destino
+
+
+def _app_mestre(persona, tmp_path, personas_dir, audit=None):
+    return _app(
+        persona,
+        _engine_com_proposta_externa(),
+        tmp_path,
+        senha_mestre=MESTRE,
+        personas_dir=personas_dir,
+        audit=audit,
+    )
+
+
+def _logar_mestre(client):
+    r = client.post("/painel/login", json={"senha": MESTRE})
+    assert r.status_code == 200 and r.json()["papel"] == "mestre"
+
+
+def test_papel_mestre_vs_operador(persona, tmp_path):
+    pd = _personas_copia(tmp_path)
+    client = TestClient(_app_mestre(persona, tmp_path, pd))
+
+    # operador (senha normal) → sessão válida, mas 403 na formação
+    _logar(client)
+    assert client.get("/painel/api/resumo").json()["modo"] == "operador"
+    assert client.get("/painel/api/formacao").status_code == 403
+    assert client.post("/painel/api/formacao/SOUL.md", json={"conteudo": "x"}).status_code == 403
+
+    # mestre → passa
+    _logar_mestre(client)
+    assert client.get("/painel/api/resumo").json()["modo"] == "mestre"
+    lista = client.get("/painel/api/formacao").json()
+    nomes = {a["arquivo"] for a in lista["arquivos"]}
+    assert {"SOUL.md", "USER.md"} <= nomes
+    assert any(n.startswith("playbooks/") for n in nomes)
+    assert client.get("/painel/api/formacao/SOUL.md").json()["conteudo"].startswith("---")
+
+
+def test_soul_com_yaml_invalido_da_400_e_nao_toca_o_arquivo(persona, tmp_path):
+    pd = _personas_copia(tmp_path)
+    client = TestClient(_app_mestre(persona, tmp_path, pd))
+    _logar_mestre(client)
+    original = (pd / "SOUL.md").read_text(encoding="utf-8")
+
+    r = client.post(
+        "/painel/api/formacao/SOUL.md",
+        json={"conteudo": "---\nnome: [isto: nao: fecha\n---\n\nprosa"},
+    )
+    assert r.status_code == 400
+    assert (pd / "SOUL.md").read_text(encoding="utf-8") == original  # intocado
+    assert not (pd / ".historico").exists()  # nem backup houve
+
+
+def test_salvar_formacao_faz_backup_e_audita_com_diff(persona, tmp_path):
+    pd = _personas_copia(tmp_path)
+    audit = AuditTrail(tmp_path / "audit.jsonl")
+    client = TestClient(_app_mestre(persona, tmp_path, pd, audit=audit))
+    _logar_mestre(client)
+
+    antes = (pd / "SOUL.md").read_text(encoding="utf-8")
+    novo = antes + "\n\nParágrafo acrescentado pelo mestre.\n"
+    r = client.post("/painel/api/formacao/SOUL.md", json={"conteudo": novo})
+    assert r.status_code == 200 and r.json()["requer_restart"] is True
+
+    # gravou
+    assert (pd / "SOUL.md").read_text(encoding="utf-8") == novo
+    # backup da versão anterior
+    backups = list((pd / ".historico").glob("SOUL.*.md"))
+    assert len(backups) == 1 and backups[0].read_text(encoding="utf-8") == antes
+    assert r.json()["backup"] == backups[0].name
+    # audit com diff
+    linhas = [json.loads(li) for li in (tmp_path / "audit.jsonl").read_text().splitlines()]
+    ev = next(li for li in linhas if li["tipo"] == "edicao_formacao")
+    assert ev["arquivo"] == "SOUL.md" and ev["papel"] == "mestre"
+    assert ev["tamanho_antes"] == len(antes) and ev["tamanho_depois"] == len(novo)
+    assert "Parágrafo acrescentado pelo mestre." in ev["diff"] and ev["diff"].startswith("---")
+
+
+def test_formacao_recusa_traversal_e_arquivo_fora_do_catalogo(persona, tmp_path):
+    pd = _personas_copia(tmp_path)
+    client = TestClient(_app_mestre(persona, tmp_path, pd))
+    _logar_mestre(client)
+    segredo = tmp_path / "segredo.md"
+    segredo.write_text("nao deveria vazar", encoding="utf-8")
+
+    for caminho in ("../segredo.md", "playbooks/../../segredo.md", "tools.yaml", "AGENTS.txt"):
+        r = client.get(f"/painel/api/formacao/{caminho}")
+        assert r.status_code in (400, 404), caminho
+        assert "nao deveria vazar" not in r.text
+    assert segredo.read_text(encoding="utf-8") == "nao deveria vazar"
+
+
+def test_cookie_de_operador_nao_vira_mestre(persona, tmp_path):
+    """Escalada de papel: quem tem só a senha de operador não forja 'mestre'."""
+    from cortex.server.painel import _assinar, papel_do_cookie
+
+    forjado = _assinar(SENHA, 2 ** 31, "mestre")  # assinado com a senha ERRADA
+    assert papel_do_cookie(forjado, SENHA, MESTRE) is None
+
+    pd = _personas_copia(tmp_path)
+    client = TestClient(_app_mestre(persona, tmp_path, pd))
+    client.cookies.set("painel_sessao", forjado)
+    assert client.get("/painel/api/formacao").status_code in (401, 403)
+
+
+def test_index_versiona_estaticos_e_nao_cacheia(persona, tmp_path):
+    """Cache-busting: atualização de tema/JS chega sem refresh forçado."""
+    client = TestClient(_app(persona, _engine_com_proposta_externa(), tmp_path))
+    r = client.get("/painel")
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "")
+    # os ponteiros para css/js carregam a versão (mtime) — muda o arquivo, muda a URL
+    assert "/painel/static/app.css?v=" in r.text
+    assert "/painel/static/app.js?v=" in r.text
+
+
+# ------------------------------ chat no painel ------------------------------ #
+
+
+def test_chat_conversa_com_a_persona_pelo_painel(persona, tmp_path):
+    client = TestClient(_app(persona, _engine_com_proposta_externa(), tmp_path))
+    assert client.get("/painel/api/chat").status_code == 401  # protegido
+    _logar(client)
+
+    assert client.get("/painel/api/chat").json()["mensagens"] == []  # começa vazio
+    r = client.post("/painel/api/chat", json={"texto": "bom dia"})
+    assert r.status_code == 200 and r.json()["resposta"]  # StubProvider responde
+
+    # histórico sobrevive ao reload da página (sessão viva no servidor)
+    msgs = client.get("/painel/api/chat").json()["mensagens"]
+    assert [m["quem"] for m in msgs] == ["voce", "persona"]
+    assert msgs[0]["texto"] == "bom dia"
+
+    assert client.post("/painel/api/chat", json={"texto": "  "}).status_code == 400  # vazia
+
+    # nova conversa descarta o fio (efemeridade sob comando)
+    assert client.post("/painel/api/chat/novo").status_code == 200
+    assert client.get("/painel/api/chat").json()["mensagens"] == []
+
+
+def test_chat_do_painel_fala_como_o_operador_interno(persona, tmp_path):
+    """A identidade vem do CANAL autenticado: operador do USER.md, procedência interna.
+
+    Sem isso a fala do painel entraria como 'desconhecido(painel:...)' EXTERNO
+    e seria demarcada como dado de terceiro — o oposto do que o painel é.
+    """
+    engine = _engine_com_proposta_externa()
+    app = _app(persona, engine, tmp_path)
+    client = TestClient(app)
+    _logar(client)
+    client.post("/painel/api/chat", json={"texto": "oi"})
+
+    from cortex.memory.models import Procedencia as P
+
+    sessao = app.state.gerenciador_sessoes.espiar("painel", "Carlos Menezes")
+    assert sessao is not None
+    assert sessao.identidade.nome == "Carlos Menezes"
+    assert sessao.identidade.procedencia is P.INTERNA
+    # entrada interna NÃO é demarcada como dado externo
+    assert "DADO_EXTERNO" not in sessao.historico[0].content

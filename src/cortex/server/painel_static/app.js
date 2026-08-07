@@ -180,9 +180,99 @@ async function pagConta() {
   return wrap;
 }
 
+// ---- Conversar com a persona (canal 'painel', identidade = operador) ------ //
+async function pagChat() {
+  const { mensagens, persona } = await api("/painel/api/chat");
+  const wrap = el("div", { className: "chat-wrap" });
+  const topo = el("div", { className: "toolbar" }, [
+    el("h2", { textContent: `Conversar com ${persona}`, style: "margin:0;flex:1" }),
+    el("button", { textContent: "Nova conversa", className: "secundario" }),
+  ]);
+  const bNovo = topo.querySelector("button");
+  const fio = el("div", { className: "chat-fio" });
+  const campo = el("textarea", { placeholder: "escreva e pressione Enter (Shift+Enter quebra linha)", rows: 2 });
+  const bEnviar = el("button", { textContent: "Enviar" });
+
+  const bolha = (quem, texto) => {
+    const b = el("div", { className: `bolha ${quem}` });
+    b.append(el("div", { className: "quem", textContent: quem === "voce" ? "você" : persona }));
+    b.append(el("div", { textContent: texto }));
+    return b;
+  };
+  const rolar = () => { fio.scrollTop = fio.scrollHeight; };
+  for (const m of mensagens) fio.append(bolha(m.quem, m.texto));
+  if (!mensagens.length) fio.append(el("p", { className: "muted", textContent: "Sem conversa ainda — a sessão é efêmera; o que a persona aprende vai para a memória." }));
+
+  const enviar = async () => {
+    const texto = campo.value.trim();
+    if (!texto) return;
+    campo.value = "";
+    fio.append(bolha("voce", texto));
+    const pensando = el("div", { className: "bolha persona muted", textContent: "…" });
+    fio.append(pensando); rolar();
+    bEnviar.disabled = true; campo.disabled = true;
+    try {
+      const r = await api("/painel/api/chat", { method: "POST", body: JSON.stringify({ texto }) });
+      pensando.remove(); fio.append(bolha("persona", r.resposta));
+    } catch (e) { pensando.remove(); fio.append(el("p", { className: "erro", textContent: e.message })); }
+    bEnviar.disabled = false; campo.disabled = false; campo.focus(); rolar();
+  };
+  bEnviar.addEventListener("click", enviar);
+  campo.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); }
+  });
+  bNovo.addEventListener("click", async () => {
+    if (!confirm("Descartar esta conversa e começar do zero?")) return;
+    try { await api("/painel/api/chat/novo", { method: "POST" }); irPara("chat"); toast("conversa reiniciada"); }
+    catch (e) { toast(e.message, true); }
+  });
+
+  wrap.append(topo, fio, el("div", { className: "chat-envio" }, [campo, bEnviar]));
+  setTimeout(() => { rolar(); campo.focus(); }, 0);
+  return wrap;
+}
+
+// ---- Formação: SÓ no modo mestre (criador/dev). Auditado + com backup. ---- //
+async function pagFormacao() {
+  const { arquivos, personas_dir } = await api("/painel/api/formacao");
+  const wrap = el("div", {}, [el("h2", { textContent: "Formação (modo mestre)" })]);
+  wrap.append(el("div", { className: "aviso-mestre" }, [
+    el("strong", { textContent: "Edição de formação. " }),
+    el("span", { textContent: `Toda alteração é auditada (com diff) e a versão anterior vai para personas/.historico/. O conteúdo é validado antes de salvar — YAML inválido não grava. A persona em memória só muda após reiniciar o serviço. Pasta: ${personas_dir}` }),
+  ]));
+
+  const sel = el("select");
+  for (const a of arquivos) sel.append(el("option", { value: a.arquivo, textContent: `${a.arquivo} (${a.bytes} B)` }));
+  const bAbrir = el("button", { textContent: "Abrir", className: "secundario" });
+  const bSalvar = el("button", { textContent: "Salvar", disabled: true });
+  wrap.append(el("div", { className: "toolbar" }, [sel, bAbrir, bSalvar]));
+
+  const area = el("textarea", { className: "editor", placeholder: "escolha um arquivo e clique em Abrir" });
+  const erro = el("p", { className: "erro" });
+  wrap.append(area, erro);
+
+  const abrir = async () => {
+    erro.textContent = "";
+    try {
+      const r = await api(`/painel/api/formacao/${sel.value}`);
+      area.value = r.conteudo; bSalvar.disabled = false;
+    } catch (e) { erro.textContent = e.message; }
+  };
+  bAbrir.addEventListener("click", abrir);
+  bSalvar.addEventListener("click", async () => {
+    erro.textContent = ""; bSalvar.disabled = true;
+    try {
+      const r = await api(`/painel/api/formacao/${sel.value}`, { method: "POST", body: JSON.stringify({ conteudo: area.value }) });
+      toast(`${sel.value} salvo — ${r.aviso}`);
+    } catch (e) { erro.textContent = e.message; }
+    bSalvar.disabled = false;
+  });
+  return wrap;
+}
+
 // ----------------------------- roteamento -------------------------------- //
 
-const PAGINAS = { resumo: pagResumo, fila: pagFila, memoria: pagMemoria, kb: pagKB, audit: pagAudit, conta: pagConta };
+const PAGINAS = { chat: pagChat, resumo: pagResumo, fila: pagFila, memoria: pagMemoria, kb: pagKB, audit: pagAudit, conta: pagConta, formacao: pagFormacao };
 
 function irPara(nome) { if (location.hash !== "#" + nome) location.hash = nome; else rota(); }
 
@@ -199,6 +289,12 @@ async function iniciar() {
     const r = await api("/painel/api/resumo");
     $("#persona").textContent = `· ${r.persona}`;
     $("#operador").textContent = r.operador;
+    // Aba Formação e selo só existem para a sessão MESTRE (o servidor também
+    // barra por 403 — isto aqui é conveniência de UI, não a fronteira).
+    const mestre = r.modo === "mestre";
+    $("#nav-formacao").classList.toggle("hidden", !mestre);
+    $("#selo-mestre").classList.toggle("hidden", !mestre);
+    if (!mestre && location.hash === "#formacao") location.hash = "resumo";
     mostrarApp();
     if (!location.hash) location.hash = "resumo";
     rota();

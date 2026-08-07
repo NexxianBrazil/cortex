@@ -176,6 +176,13 @@ class CortexConfig(BaseSettings):
         default=None,
         description="Senha do operador no painel (de env/.env). Sem senha, o painel NÃO sobe",
     )
+    painel_senha_mestre: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Senha do MODO MESTRE do painel (edição da formação: SOUL/USER/playbooks). "
+            "Uso do criador/dev — deixe VAZIO em produção: sem ela o modo mestre não existe"
+        ),
+    )
     painel_operador: str | None = Field(
         default=None,
         description="Nome do operador do painel (autor das decisões); None usa o gestor do USER.md",
