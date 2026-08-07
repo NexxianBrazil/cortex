@@ -13,6 +13,7 @@ HttpOnly) — separada do token de bridge das rotas /v1/* (clientes diferentes).
 import hashlib
 import hmac
 import logging
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,6 +58,50 @@ def _cookie_valido(segredo: str, valor: str | None) -> bool:
         return False
     esperado = hmac.new(segredo.encode(), str(expira_em).encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(sig, esperado) and expira_em > int(time.time())
+
+
+# --------------------------- senha do operador ----------------------------- #
+
+SENHA_MIN = 8
+# Linha `painel_senha = "..."` do cortex.toml (aspas simples ou duplas).
+_LINHA_SENHA = re.compile(r'^(\s*painel_senha\s*=\s*)(".*"|\'.*\')(\s*(?:#.*)?)$', re.MULTILINE)
+
+
+class SenhaTomlError(Exception):
+    """Não deu para persistir a senha nova no cortex.toml do deploy."""
+
+
+def _escapar_toml(valor: str) -> str:
+    """Escapa para string básica TOML (barra invertida e aspas duplas)."""
+    return valor.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def atualizar_senha_no_toml(toml_path: Path, nova: str) -> None:
+    """Reescreve APENAS a linha `painel_senha` do cortex.toml, preservando o resto.
+
+    Substituição cirúrgica por regex (em vez de reserializar o TOML) de
+    propósito: o arquivo é curado por humano e cheio de comentários que
+    explicam cada campo — reserializar perderia tudo isso.
+    """
+    if not toml_path.is_file():
+        raise SenhaTomlError(
+            f"não encontrei o {toml_path.name} do deploy em {toml_path} — "
+            "troque a senha editando o arquivo e reinicie o serviço"
+        )
+    texto = toml_path.read_text(encoding="utf-8")
+    novo_texto, trocas = _LINHA_SENHA.subn(
+        lambda m: f'{m.group(1)}"{_escapar_toml(nova)}"{m.group(3)}', texto, count=1
+    )
+    if trocas != 1:
+        raise SenhaTomlError(
+            f"não achei a linha `painel_senha = \"...\"` em {toml_path} — "
+            "troque a senha editando o arquivo e reinicie o serviço"
+        )
+    # Escrita atômica: um crash no meio não pode deixar o deploy sem senha
+    # válida (o painel não subiria no próximo boot — fail-safe às avessas).
+    temp = toml_path.with_suffix(toml_path.suffix + ".tmp")
+    temp.write_text(novo_texto, encoding="utf-8")
+    temp.replace(toml_path)
 
 
 # --------------------------- serialização leve ----------------------------- #
@@ -125,12 +170,16 @@ def montar_painel(
     senha: str,
     operador: str,
     sessao_horas: int,
+    toml_path: Path | None = None,
 ) -> None:
     """Registra as rotas do painel no app. `operador` é o autor das decisões.
 
     Valida que o operador EXISTE no USER.md (órfão = erro de config, padrão da
     casa). A AUTORIDADE em si é enforçada por engine.aprovar (4b): um operador
     que existe mas não manda no domínio leva 409 na hora de decidir.
+
+    `toml_path` é o cortex.toml do deploy — necessário para a troca de senha
+    pelo painel (sem ele a rota responde 409 explicando como trocar à mão).
     """
     if papel_no_user_md(persona, operador) is None:
         raise ValueError(
@@ -139,10 +188,25 @@ def montar_painel(
         )
 
     router = APIRouter(prefix="/painel")
+    # A senha é MUTÁVEL em runtime (trocável pelo painel) — holder em vez de
+    # closure sobre o valor, para a troca valer no ato, sem reiniciar o serviço.
+    # É também o segredo que assina o cookie: trocar a senha invalida as
+    # sessões abertas (inclusive as de quem roubou a senha antiga).
+    estado = {"senha": senha}
 
     def requer_painel(painel_sessao: str | None = Cookie(default=None)) -> None:
-        if not _cookie_valido(senha, painel_sessao):
+        if not _cookie_valido(estado["senha"], painel_sessao):
             raise HTTPException(status_code=401, detail="sessão do painel ausente ou expirada")
+
+    def _emitir_cookie(response: Response) -> None:
+        expira_em = int(time.time()) + sessao_horas * 3600
+        response.set_cookie(
+            COOKIE,
+            _assinar(estado["senha"], expira_em),
+            httponly=True,
+            samesite="lax",
+            max_age=sessao_horas * 3600,
+        )
 
     # ---- página e login (não protegidos) --------------------------------- #
 
@@ -152,16 +216,9 @@ def montar_painel(
 
     @router.post("/login")
     def login(body: dict, response: Response) -> dict:
-        if not hmac.compare_digest(str(body.get("senha", "")), senha):
+        if not hmac.compare_digest(str(body.get("senha", "")), estado["senha"]):
             raise HTTPException(status_code=401, detail="senha inválida")
-        expira_em = int(time.time()) + sessao_horas * 3600
-        response.set_cookie(
-            COOKIE,
-            _assinar(senha, expira_em),
-            httponly=True,
-            samesite="lax",
-            max_age=sessao_horas * 3600,
-        )
+        _emitir_cookie(response)
         return {"ok": True, "operador": operador}
 
     @router.post("/logout")
@@ -301,6 +358,49 @@ def montar_painel(
     def kb_reindexar() -> dict:
         with lock:
             return {"ok": True, **kb.indexar()}
+
+    # ---- senha do operador (protegida) ----------------------------------- #
+
+    @router.post("/api/senha", dependencies=[_dep(requer_painel)])
+    def trocar_senha(body: dict, response: Response) -> dict:
+        """Troca a senha do painel: valida a atual, persiste no toml e reemite o cookie.
+
+        A senha é config do DEPLOY (mora no cortex.toml), então a troca só vale
+        se o arquivo for gravável — persistir primeiro e só então mudar em
+        memória evita divergência entre o que vale agora e o que vale no
+        próximo boot. Estar logado NÃO basta: exige a senha atual (defesa
+        contra sessão esquecida aberta na máquina).
+        """
+        atual = str(body.get("senha_atual", ""))
+        nova = str(body.get("nova_senha", ""))
+        if not hmac.compare_digest(atual, estado["senha"]):
+            raise HTTPException(status_code=401, detail="senha atual incorreta")
+        if len(nova) < SENHA_MIN:
+            raise HTTPException(
+                status_code=400, detail=f"a nova senha precisa ter ao menos {SENHA_MIN} caracteres"
+            )
+        if nova == estado["senha"]:
+            raise HTTPException(status_code=400, detail="a nova senha é igual à atual")
+        if toml_path is None:
+            raise HTTPException(
+                status_code=409,
+                detail="deploy sem cortex.toml conhecido — troque a senha no arquivo e reinicie",
+            )
+        try:
+            atualizar_senha_no_toml(toml_path, nova)
+        except SenhaTomlError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"falha ao gravar {toml_path}: {exc}"
+            ) from exc
+
+        estado["senha"] = nova          # vale no ato — sem reiniciar o serviço
+        _emitir_cookie(response)        # mantém ESTA sessão viva (as outras caem)
+        if audit is not None:
+            audit.registrar("painel_senha_trocada", operador=operador)
+        logger.info("senha do painel trocada pelo operador %s", operador)
+        return {"ok": True}
 
     app.include_router(router)
     app.mount("/painel/static", StaticFiles(directory=str(_STATIC_DIR)), name="painel_static")

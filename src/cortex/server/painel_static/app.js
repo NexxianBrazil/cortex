@@ -152,9 +152,37 @@ async function pagAudit() {
   return wrap;
 }
 
+async function pagConta() {
+  const wrap = el("div", {}, [el("h2", { textContent: "Conta do operador" })]);
+  const form = el("form", { className: "card" });
+  const atual = el("input", { type: "password", placeholder: "senha atual", autocomplete: "current-password" });
+  const nova = el("input", { type: "password", placeholder: "nova senha (mín. 8 caracteres)", autocomplete: "new-password" });
+  const conf = el("input", { type: "password", placeholder: "repita a nova senha", autocomplete: "new-password" });
+  const bt = el("button", { type: "submit", textContent: "Trocar senha" });
+  const erro = el("p", { className: "erro" });
+  form.append(
+    el("p", { className: "muted", textContent: "A senha vale para este deploy e é gravada no cortex.toml. Ao trocar, as outras sessões abertas caem — esta continua ativa." }),
+    atual, nova, conf, bt, erro,
+  );
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    erro.textContent = "";
+    if (nova.value !== conf.value) { erro.textContent = "a confirmação não confere"; return; }
+    bt.disabled = true;
+    try {
+      await api("/painel/api/senha", { method: "POST", body: JSON.stringify({ senha_atual: atual.value, nova_senha: nova.value }) });
+      form.reset();
+      toast("senha trocada — já vale para os próximos logins");
+    } catch (err) { erro.textContent = err.message; }
+    bt.disabled = false;
+  });
+  wrap.append(form);
+  return wrap;
+}
+
 // ----------------------------- roteamento -------------------------------- //
 
-const PAGINAS = { resumo: pagResumo, fila: pagFila, memoria: pagMemoria, kb: pagKB, audit: pagAudit };
+const PAGINAS = { resumo: pagResumo, fila: pagFila, memoria: pagMemoria, kb: pagKB, audit: pagAudit, conta: pagConta };
 
 function irPara(nome) { if (location.hash !== "#" + nome) location.hash = nome; else rota(); }
 

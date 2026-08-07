@@ -16,6 +16,7 @@ import secrets
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
@@ -83,6 +84,7 @@ def criar_app(
     audit=None,
     painel_operador: str | None = None,
     lock=None,
+    deploy_dir=None,
 ) -> FastAPI:
     """Monta o app FastAPI sobre um runtime já montado (testável com StubProvider).
 
@@ -207,6 +209,9 @@ def criar_app(
                 senha=senha,
                 operador=painel_operador,
                 sessao_horas=config.painel_sessao_horas,
+                # cortex.toml do deploy: sem ele a troca de senha pelo painel
+                # responde 409 explicando como trocar à mão (dev roda do CWD).
+                toml_path=(Path(deploy_dir) / "cortex.toml") if deploy_dir else None,
             )
             logger.info("painel do operador em /painel (operador=%s)", painel_operador)
         else:

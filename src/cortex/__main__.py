@@ -339,6 +339,7 @@ def _servir(config: CortexConfig, deploy: str | None, host: str | None, porta: i
         audit=audit,
         painel_operador=operador,
         lock=lock,
+        deploy_dir=deploy_dir,
     )
 
     scheduler = _agendar_operacoes(config, engine, lock, audit, notificador)
