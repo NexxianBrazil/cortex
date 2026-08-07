@@ -449,3 +449,49 @@ def test_index_versiona_estaticos_e_nao_cacheia(persona, tmp_path):
     # os ponteiros para css/js carregam a versão (mtime) — muda o arquivo, muda a URL
     assert "/painel/static/app.css?v=" in r.text
     assert "/painel/static/app.js?v=" in r.text
+
+
+# ------------------------------ chat no painel ------------------------------ #
+
+
+def test_chat_conversa_com_a_persona_pelo_painel(persona, tmp_path):
+    client = TestClient(_app(persona, _engine_com_proposta_externa(), tmp_path))
+    assert client.get("/painel/api/chat").status_code == 401  # protegido
+    _logar(client)
+
+    assert client.get("/painel/api/chat").json()["mensagens"] == []  # começa vazio
+    r = client.post("/painel/api/chat", json={"texto": "bom dia"})
+    assert r.status_code == 200 and r.json()["resposta"]  # StubProvider responde
+
+    # histórico sobrevive ao reload da página (sessão viva no servidor)
+    msgs = client.get("/painel/api/chat").json()["mensagens"]
+    assert [m["quem"] for m in msgs] == ["voce", "persona"]
+    assert msgs[0]["texto"] == "bom dia"
+
+    assert client.post("/painel/api/chat", json={"texto": "  "}).status_code == 400  # vazia
+
+    # nova conversa descarta o fio (efemeridade sob comando)
+    assert client.post("/painel/api/chat/novo").status_code == 200
+    assert client.get("/painel/api/chat").json()["mensagens"] == []
+
+
+def test_chat_do_painel_fala_como_o_operador_interno(persona, tmp_path):
+    """A identidade vem do CANAL autenticado: operador do USER.md, procedência interna.
+
+    Sem isso a fala do painel entraria como 'desconhecido(painel:...)' EXTERNO
+    e seria demarcada como dado de terceiro — o oposto do que o painel é.
+    """
+    engine = _engine_com_proposta_externa()
+    app = _app(persona, engine, tmp_path)
+    client = TestClient(app)
+    _logar(client)
+    client.post("/painel/api/chat", json={"texto": "oi"})
+
+    from cortex.memory.models import Procedencia as P
+
+    sessao = app.state.gerenciador_sessoes.espiar("painel", "Carlos Menezes")
+    assert sessao is not None
+    assert sessao.identidade.nome == "Carlos Menezes"
+    assert sessao.identidade.procedencia is P.INTERNA
+    # entrada interna NÃO é demarcada como dado externo
+    assert "DADO_EXTERNO" not in sessao.historico[0].content

@@ -23,6 +23,8 @@ from pydantic import BaseModel
 
 from cortex.identity.models import Persona
 from cortex.runtime import AgentLoop, LoopLimiteExcedidoError
+from cortex.runtime.identidade import Identidade, identidade_interna
+from cortex.runtime.messages import Role
 from cortex.server.canal_saida import CanalSaida, CanalSaidaError
 from cortex.server.identidade import ChaveCanal, resolver_identidade
 from cortex.server.sessoes import GerenciadorSessoes
@@ -94,6 +96,7 @@ def criar_app(
     """
     app = FastAPI(title=f"Cortex — {persona.soul.nome}", version="8")
     gerenciador = GerenciadorSessoes(persona, ttl_minutos, agora=agora)
+    app.state.gerenciador_sessoes = gerenciador   # inspeção (testes/diagnóstico)
     # Lock GLOBAL do deploy: serializa turnos E o job de reflexão (Fase 8). Pode
     # ser injetado por `cortex servir` para compartilhar com o Scheduler.
     lock = lock or threading.Lock()
@@ -119,11 +122,17 @@ def criar_app(
     def _ids_pendentes() -> set[int]:
         return {p.id for p in engine.pending_approvals} if engine is not None else set()
 
-    def processar_turno(canal: str, canal_id: str, texto: str) -> str:
-        """Pipeline único dos dois endpoints: resolve identidade, roda o turno,
+    def processar_turno(
+        canal: str, canal_id: str, texto: str, identidade: Identidade | None = None
+    ) -> str:
+        """Pipeline único dos endpoints: resolve identidade, roda o turno,
         e notifica o gestor sobre propostas NOVAS daquele turno (diff de pendentes).
+
+        `identidade` pode vir PRONTA de um canal que já autenticou a pessoa —
+        é o caso do chat do painel, onde a senha do operador já provou quem é.
+        Nos bridges (WhatsApp/HTTP) ela segue sendo resolvida pelo mapa.
         """
-        identidade = resolver_identidade(canal, canal_id, mapa_identidades, persona)
+        identidade = identidade or resolver_identidade(canal, canal_id, mapa_identidades, persona)
         with lock:  # um turno por vez (engine não é thread-safe)
             sessao = gerenciador.obter(canal, canal_id, identidade)
             pend_antes = _ids_pendentes()
@@ -198,6 +207,39 @@ def criar_app(
         if senha and engine is not None and kb is not None and painel_operador:
             from cortex.server.painel import montar_painel
 
+            # ---- chat do painel -------------------------------------------
+            # Canal PRÓPRIO ("painel"), com identidade INTERNA já autenticada
+            # pela senha — o operador existe no USER.md (validado no montar).
+            # Reusa o MESMO pipeline dos bridges: lock, contadores, promoção,
+            # governança e notificação de proposta nova saem de graça.
+            CANAL_PAINEL = "painel"
+
+            def _identidade_painel() -> Identidade:
+                return identidade_interna(
+                    persona, painel_operador, canal=CANAL_PAINEL, canal_id=painel_operador
+                )
+
+            def chat_enviar(texto: str) -> str:
+                return processar_turno(
+                    CANAL_PAINEL, painel_operador, texto, identidade=_identidade_painel()
+                )
+
+            def chat_historico() -> list[dict]:
+                """Conversa da sessão viva (só usuário/persona; tool fica fora)."""
+                sessao = gerenciador.espiar(CANAL_PAINEL, painel_operador)
+                if sessao is None:
+                    return []
+                fala = []
+                for m in sessao.historico:
+                    if m.role is Role.USER:
+                        fala.append({"quem": "voce", "texto": m.content})
+                    elif m.role is Role.ASSISTANT and m.content and not m.tool_calls:
+                        fala.append({"quem": "persona", "texto": m.content})
+                return fala
+
+            def chat_novo() -> None:
+                gerenciador.descartar(CANAL_PAINEL, painel_operador)
+
             montar_painel(
                 app,
                 persona=persona,
@@ -219,6 +261,9 @@ def criar_app(
                     else None
                 ),
                 personas_dir=config.personas_dir,
+                chat_enviar=chat_enviar,
+                chat_historico=chat_historico,
+                chat_novo=chat_novo,
             )
             logger.info("painel do operador em /painel (operador=%s)", painel_operador)
         else:

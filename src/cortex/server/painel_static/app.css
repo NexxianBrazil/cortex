@@ -108,6 +108,19 @@ tr.clic:hover { background: var(--panel2); }
 .toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
 .toolbar input { width: 240px; }
 
+/* Chat com a persona — mesma matiz, distinção por alinhamento e preenchimento */
+.chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 190px); min-height: 340px; }
+.chat-fio {
+  flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; background: var(--panel); display: flex; flex-direction: column; gap: 10px;
+}
+.bolha { max-width: 72%; padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; }
+.bolha .quem { font-size: 11px; font-weight: 700; opacity: .75; margin-bottom: 2px; }
+.bolha.voce { align-self: flex-end; background: var(--accent); color: #fff; }
+.bolha.persona { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border); }
+.chat-envio { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; }
+.chat-envio textarea { flex: 1; resize: vertical; }
+
 /* Editor de formação (modo mestre) */
 .editor { width: 100%; min-height: 55vh; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .aviso-mestre {

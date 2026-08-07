@@ -297,6 +297,9 @@ def montar_painel(
     toml_path: Path | None = None,
     senha_mestre: str | None = None,
     personas_dir: Path | None = None,
+    chat_enviar=None,
+    chat_historico=None,
+    chat_novo=None,
 ) -> None:
     """Registra as rotas do painel no app. `operador` é o autor das decisões.
 
@@ -534,6 +537,37 @@ def montar_painel(
     def kb_reindexar() -> dict:
         with lock:
             return {"ok": True, **kb.indexar()}
+
+    # ---- chat com a persona (protegido) ---------------------------------- #
+
+    @router.get("/api/chat", dependencies=[_dep(requer_painel)])
+    def chat_ler() -> dict:
+        """Conversa da sessão viva — permite recarregar a página sem perder o fio."""
+        if chat_historico is None:
+            raise HTTPException(status_code=503, detail="chat indisponível neste servidor")
+        return {"mensagens": chat_historico(), "persona": persona.soul.nome}
+
+    @router.post("/api/chat", dependencies=[_dep(requer_painel)])
+    def chat_falar(body: dict) -> dict:
+        """Envia um turno à persona pelo canal 'painel' (identidade = operador).
+
+        Passa pelo MESMO pipeline dos bridges: lock, governança, promoção de
+        memória e notificação de proposta nova. O que muda é só o canal.
+        """
+        if chat_enviar is None:
+            raise HTTPException(status_code=503, detail="chat indisponível neste servidor")
+        texto = str(body.get("texto", "")).strip()
+        if not texto:
+            raise HTTPException(status_code=400, detail="mensagem vazia")
+        return {"resposta": chat_enviar(texto)}
+
+    @router.post("/api/chat/novo", dependencies=[_dep(requer_painel)])
+    def chat_reiniciar() -> dict:
+        """Descarta a sessão: a próxima mensagem começa do zero (efemeridade)."""
+        if chat_novo is None:
+            raise HTTPException(status_code=503, detail="chat indisponível neste servidor")
+        chat_novo()
+        return {"ok": True}
 
     # ---- formação (MODO MESTRE — criador/dev, nunca o operador) ---------- #
 
