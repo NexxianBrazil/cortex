@@ -43,6 +43,14 @@ dev = [
 graphiti = [
     "graphiti-core[kuzu]>=0.29",
 ]
+# Provider claude_code (Fase dev): executa o loop do agente no Claude Agent
+# SDK, autenticado pela assinatura do Claude Code logado na máquina. Extra
+# SEPARADO como o graphiti: uso de DESENVOLVIMENTO — produção usa provider
+# claude (API). Instale com:
+#   uv pip install -e ".[claudecode]"
+claudecode = [
+    "claude-agent-sdk>=0.1",
+]
 
 [project.scripts]
 cortex = "cortex.__main__:main"
